@@ -1,0 +1,4 @@
+node_modules/
+offscreen.js.map
+server/.env
+server/node_modules/

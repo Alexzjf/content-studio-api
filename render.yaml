@@ -1,0 +1,20 @@
+# Deploy: push to GitHub → render.com → New Blueprint → select this repo
+# Or: New Web Service → Root Directory: server → npm start
+services:
+  - type: web
+    name: olexander-cs-api
+    runtime: node
+    plan: free
+    rootDir: server
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash-lite
+      - key: DAILY_LIMIT_PER_CLIENT
+        value: "300"
+      - key: NODE_ENV
+        value: production
