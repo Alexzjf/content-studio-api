@@ -32,12 +32,12 @@ function isTransient(status, errMsg) {
 
 export function retryAfterSec(errMsg) {
   const m = String(errMsg || "").match(/retry in ([\d.]+)s/i);
-  if (m) return Math.min(25, Math.max(2, Math.ceil(Number(m[1]))));
-  return 3;
+  if (m) return Math.min(5, Math.max(1, Math.ceil(Number(m[1]))));
+  return 2;
 }
 
-function backoffMs(attempt, errMsg) {
-  return Math.min(12000, retryAfterSec(errMsg) * 1000 + attempt * 1200);
+function backoffMs(attempt) {
+  return 800 + attempt * 700;
 }
 
 function formatUserError(errMsg) {
@@ -45,7 +45,7 @@ function formatUserError(errMsg) {
     return "Модель Gemini недоступна. Спробуйте ще раз або змініть GEMINI_MODEL.";
   }
   if (isTransient(429, errMsg)) {
-    return "Gemini тимчасово зайнятий. Спробуйте ще раз через кілька секунд.";
+    return "Хмарний Gemini зайнятий. Спробуйте ще раз або вкажіть свій API ключ у Налаштуваннях.";
   }
   return errMsg;
 }
@@ -73,7 +73,7 @@ export async function geminiGenerate(
 ) {
   const preferred = normalizeModel(model);
   const models = [...new Set([preferred, ...FALLBACK_MODELS.map(normalizeModel)])];
-  const maxTries = 8;
+  const maxTries = 3;
   let lastError = "Gemini request failed";
   let lastTransient = null;
 
@@ -112,14 +112,13 @@ export async function geminiGenerate(
     lastError = errMsg;
 
     if (isModelUnavailable(response.status, errMsg)) {
-      if (attempt < maxTries - 1) continue;
-      break;
+      continue;
     }
 
     if (isTransient(response.status, errMsg)) {
       lastTransient = { errMsg, retryAfterSec: retryAfterSec(errMsg) };
       if (attempt < maxTries - 1) {
-        await sleep(backoffMs(attempt, errMsg));
+        await sleep(backoffMs(attempt));
         continue;
       }
       break;

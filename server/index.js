@@ -77,7 +77,7 @@ function authMiddleware(req, res, next) {
   next();
 }
 
-const API_VERSION = "1.27.1";
+const API_VERSION = "1.27.2";
 
 app.get("/health", (_req, res) => {
   res.json({

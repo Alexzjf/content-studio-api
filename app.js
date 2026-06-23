@@ -1,4 +1,4 @@
-const APP_VERSION = "1.27.1";
+const APP_VERSION = "1.27.2";
 
 const DEFAULT_SETTINGS = {
   uiLang: "en",
@@ -148,24 +148,23 @@ function isRetryableAiError(status, raw) {
   );
 }
 
-function retryWaitSec(status, data, raw) {
-  return Math.min(
-    20,
-    data?.retryAfterSec ||
-      Number(String(raw).match(/~(\d+)\s*сек/i)?.[1]) ||
-      Number(String(raw).match(/retry in ([\d.]+)s/i)?.[1]) ||
-      (status === 429 ? 3 : 4)
-  );
+function retryWaitSec(_status, _data, _raw) {
+  return 2;
 }
 
-async function hostedApiPost(path, body, settings, timeoutMs = 120000) {
+async function hostedApiPost(path, body, settings, timeoutMs = 28000) {
   const bases = getHostedApiBases(settings);
+  const deadline = Date.now() + 38000;
   let lastError = null;
 
   for (const base of bases) {
-    for (let rateTry = 0; rateTry < 6; rateTry++) {
+    for (let rateTry = 0; rateTry < 2; rateTry++) {
+      if (Date.now() >= deadline) {
+        throw new Error(t("aiBusyUseOwnKey"));
+      }
+      const remaining = Math.max(5000, deadline - Date.now());
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+      const timeout = setTimeout(() => controller.abort(), Math.min(timeoutMs, remaining));
       try {
         const response = await fetch(`${base}${path}`, {
           method: "POST",
@@ -176,16 +175,19 @@ async function hostedApiPost(path, body, settings, timeoutMs = 120000) {
         const data = await response.json().catch(() => ({}));
         if (!response.ok) {
           const raw = data?.error || "";
-          if (isRetryableAiError(response.status, raw) && rateTry < 5) {
+          if (isRetryableAiError(response.status, raw) && rateTry === 0 && Date.now() < deadline) {
             const sec = retryWaitSec(response.status, data, raw);
             setStatus(t("rateLimitWait", { sec }));
-            await new Promise((r) => setTimeout(r, sec * 1000 + 400));
+            await new Promise((r) => setTimeout(r, sec * 1000 + 200));
             continue;
           }
           const err = new Error(formatApiError(response.status, data, base));
           if ((response.status === 503 || response.status === 404) && bases.length > 1) {
             lastError = err;
             break;
+          }
+          if (isRetryableAiError(response.status, raw)) {
+            throw new Error(t("aiBusyUseOwnKey"));
           }
           throw err;
         }
@@ -268,17 +270,28 @@ function getAiDescribeFn() {
 
 async function callChatWithSources(sources, settings, history) {
   const fn = getAiChatFn();
-  if (typeof fn === "function") {
-    return fn(sources, settings, history);
-  }
+  const run = async (s) => {
+    if (typeof fn === "function") {
+      return fn(sources, s, history);
+    }
+    if ((s.aiProvider || "hosted") === "hosted") {
+      return hostedChatDirect(sources, s, history);
+    }
+    const res = await runtimeSend({ type: "CHAT", sources, settings: s, history });
+    if (res?.error) throw new Error(res.error);
+    return res.text;
+  };
 
-  if ((settings.aiProvider || "hosted") === "hosted") {
-    return hostedChatDirect(sources, settings, history);
+  try {
+    return await run(settings);
+  } catch (err) {
+    const key = settings.geminiApiKey?.trim() || $("geminiApiKey")?.value?.trim();
+    if ((settings.aiProvider || "hosted") === "hosted" && key) {
+      setStatus(t("aiFallbackOwnKey"), "success");
+      return run({ ...settings, aiProvider: "gemini", geminiApiKey: key });
+    }
+    throw err;
   }
-
-  const res = await runtimeSend({ type: "CHAT", sources, settings, history });
-  if (res?.error) throw new Error(res.error);
-  return res.text;
 }
 
 async function callDescribeImage(imageBase64, settings) {
