@@ -25,7 +25,7 @@ app.use(express.json({ limit: "12mb" }));
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 const EXTENSION_SECRET = process.env.EXTENSION_SECRET || "";
 const DAILY_LIMIT = Number(process.env.DAILY_LIMIT_PER_CLIENT || 9999);
-const DEFAULT_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash-lite";
+const DEFAULT_MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash";
 const PORT = Number(process.env.PORT || 8787);
 
 const usage = new Map();
@@ -77,7 +77,7 @@ function authMiddleware(req, res, next) {
   next();
 }
 
-const API_VERSION = "1.27.0";
+const API_VERSION = "1.27.1";
 
 app.get("/health", (_req, res) => {
   res.json({
@@ -109,10 +109,14 @@ app.post("/v1/chat", authMiddleware, async (req, res) => {
     if (err.code === "RATE_LIMIT") {
       return res.status(429).json({
         error: err.message,
-        retryAfterSec: err.retryAfterSec || 45,
+        retryAfterSec: err.retryAfterSec || 3,
       });
     }
-    res.status(502).json({ error: err.message || "AI error" });
+    const msg = err.message || "AI error";
+    if (/тимчасово зайнятий|high demand|overloaded|quota|rate limit/i.test(msg)) {
+      return res.status(429).json({ error: msg, retryAfterSec: 3 });
+    }
+    res.status(502).json({ error: msg });
   }
 });
 
@@ -132,7 +136,17 @@ app.post("/v1/describe-image", authMiddleware, async (req, res) => {
     });
     res.json({ text });
   } catch (err) {
-    res.status(502).json({ error: err.message || "AI error" });
+    if (err.code === "RATE_LIMIT") {
+      return res.status(429).json({
+        error: err.message,
+        retryAfterSec: err.retryAfterSec || 3,
+      });
+    }
+    const msg = err.message || "AI error";
+    if (/тимчасово зайнятий|high demand|overloaded|quota|rate limit/i.test(msg)) {
+      return res.status(429).json({ error: msg, retryAfterSec: 3 });
+    }
+    res.status(502).json({ error: msg });
   }
 });
 

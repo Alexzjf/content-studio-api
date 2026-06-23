@@ -1,0 +1,49 @@
+{
+  "manifest_version": 3,
+  "name": "__MSG_extensionName__",
+  "version": "1.27.1",
+  "description": "__MSG_extensionDescription__",
+  "default_locale": "en",
+  "permissions": ["storage", "activeTab", "offscreen", "scripting", "windows", "tabs", "sidePanel"],
+  "host_permissions": [
+    "https://content-studio-api-1.onrender.com/*",
+    "https://content-studio-api.onrender.com/*",
+    "https://*.onrender.com/*",
+    "http://localhost:8787/*",
+    "http://127.0.0.1:8787/*",
+    "http://localhost:11434/*",
+    "http://127.0.0.1:11434/*",
+    "https://x.com/*",
+    "https://twitter.com/*",
+    "https://huggingface.co/*",
+    "https://cdn-lfs.huggingface.co/*",
+    "https://generativelanguage.googleapis.com/*",
+    "https://openrouter.ai/*"
+  ],
+  "action": {
+    "default_title": "Content Studio for X",
+    "default_popup": "app.html"
+  },
+  "side_panel": {
+    "default_path": "app.html?side=1"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://x.com/*", "https://twitter.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["offscreen.html", "app.html", "page-panel.js", "audio-store.js", "wasm/*"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  }
+}

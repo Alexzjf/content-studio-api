@@ -1,11 +1,15 @@
-const FALLBACK_MODELS = ["gemini-2.5-flash-lite", "gemini-2.0-flash"];
+const FALLBACK_MODELS = ["gemini-2.0-flash", "gemini-2.5-flash-lite"];
 
 function normalizeModel(model) {
-  const m = String(model || "gemini-2.5-flash-lite")
+  const m = String(model || "gemini-2.0-flash")
     .trim()
     .replace(/^models\//, "");
-  if (/gemini-1\.5/i.test(m)) return "gemini-2.5-flash-lite";
-  return m || "gemini-2.5-flash-lite";
+  if (/gemini-1\.5/i.test(m)) return "gemini-2.0-flash";
+  return m || "gemini-2.0-flash";
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 function isModelUnavailable(status, errMsg) {
@@ -15,24 +19,33 @@ function isModelUnavailable(status, errMsg) {
   );
 }
 
-function isRateLimited(status, errMsg) {
-  return status === 429 || /quota|rate limit|resource.?exhausted|too many requests/i.test(errMsg);
+function isTransient(status, errMsg) {
+  const msg = String(errMsg || "");
+  return (
+    status === 429 ||
+    status === 503 ||
+    /quota|rate limit|resource.?exhausted|too many requests|high demand|overloaded|try again later|unavailable/i.test(
+      msg
+    )
+  );
 }
 
 export function retryAfterSec(errMsg) {
   const m = String(errMsg || "").match(/retry in ([\d.]+)s/i);
-  return m ? Math.ceil(Number(m[1])) : 45;
+  if (m) return Math.min(25, Math.max(2, Math.ceil(Number(m[1]))));
+  return 3;
+}
+
+function backoffMs(attempt, errMsg) {
+  return Math.min(12000, retryAfterSec(errMsg) * 1000 + attempt * 1200);
 }
 
 function formatUserError(errMsg) {
   if (/not found|not supported|does not exist/i.test(errMsg)) {
-    return "Модель Gemini недоступна. У server/.env: GEMINI_MODEL=gemini-2.5-flash-lite";
+    return "Модель Gemini недоступна. Спробуйте ще раз або змініть GEMINI_MODEL.";
   }
-  if (isRateLimited(429, errMsg)) {
-    return `Ліміт Gemini. Зачекайте ~${retryAfterSec(errMsg)} сек і натисніть «Згенеруй пост» ще раз.`;
-  }
-  if (/high demand|overloaded|try again later/i.test(errMsg)) {
-    return "Gemini перевантажений. Зачекайте 30 сек і спробуйте ще раз.";
+  if (isTransient(429, errMsg)) {
+    return "Gemini тимчасово зайнятий. Спробуйте ще раз через кілька секунд.";
   }
   return errMsg;
 }
@@ -60,8 +73,9 @@ export async function geminiGenerate(
 ) {
   const preferred = normalizeModel(model);
   const models = [...new Set([preferred, ...FALLBACK_MODELS.map(normalizeModel)])];
+  const maxTries = 8;
   let lastError = "Gemini request failed";
-  let lastRateLimit = null;
+  let lastTransient = null;
 
   const contents = [];
   for (const msg of history) {
@@ -84,7 +98,8 @@ export async function geminiGenerate(
     },
   };
 
-  for (const m of models) {
+  for (let attempt = 0; attempt < maxTries; attempt++) {
+    const m = models[attempt % models.length];
     const { response, body, errMsg } = await callGemini(apiKey, m, payload);
 
     if (response.ok) {
@@ -96,22 +111,27 @@ export async function geminiGenerate(
 
     lastError = errMsg;
 
-    if (isRateLimited(response.status, errMsg)) {
-      lastRateLimit = { errMsg, retryAfterSec: retryAfterSec(errMsg) };
+    if (isModelUnavailable(response.status, errMsg)) {
+      if (attempt < maxTries - 1) continue;
       break;
     }
 
-    if (isModelUnavailable(response.status, errMsg)) {
-      continue;
+    if (isTransient(response.status, errMsg)) {
+      lastTransient = { errMsg, retryAfterSec: retryAfterSec(errMsg) };
+      if (attempt < maxTries - 1) {
+        await sleep(backoffMs(attempt, errMsg));
+        continue;
+      }
+      break;
     }
 
     throw new Error(formatUserError(errMsg));
   }
 
-  if (lastRateLimit) {
-    const err = new Error(formatUserError(lastRateLimit.errMsg));
+  if (lastTransient) {
+    const err = new Error(formatUserError(lastTransient.errMsg));
     err.code = "RATE_LIMIT";
-    err.retryAfterSec = lastRateLimit.retryAfterSec;
+    err.retryAfterSec = lastTransient.retryAfterSec;
     throw err;
   }
 
