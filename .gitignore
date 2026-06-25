@@ -1,4 +1,6 @@
 node_modules/
 offscreen.js.map
 server/.env
+server/keys.txt
+server/.env.keys
 server/node_modules/

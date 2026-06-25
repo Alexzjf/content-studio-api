@@ -1,26 +1,56 @@
 #!/usr/bin/env bash
-# Оновити хмарний сервер на Render (ключ + модель + redeploy).
-# Потрібно один раз: render login  АБО  export RENDER_API_KEY=rnd_...
+# Оновити хмарний сервер на Render (ключі + модель + redeploy).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SERVER="$ROOT/server"
+ENV_FILE="$SERVER/.env"
 SERVICE_NAME="${SERVICE_NAME:-content-studio-api-1}"
 RENDER_CLI="${RENDER_CLI:-$HOME/.local/bin/render}"
+DEPLOY_ENV="$(mktemp)"
 
 export PATH="$PATH:$HOME/.local/bin"
+trap 'rm -f "$DEPLOY_ENV"' EXIT
 
-if [[ ! -f "$SERVER/.env" ]]; then
-  echo "Створіть $SERVER/.env з GEMINI_API_KEY=..."
+if [[ ! -f "$ENV_FILE" ]]; then
+  echo "Створіть $ENV_FILE або запустіть: ./scripts/render-set-keys.sh server/keys.txt"
   exit 1
 fi
 
-# shellcheck disable=SC1091
-source "$SERVER/.env"
-if [[ -z "${GEMINI_API_KEY:-}" ]]; then
-  echo "GEMINI_API_KEY порожній у server/.env"
-  exit 1
-fi
+python3 - "$ENV_FILE" >"$DEPLOY_ENV" <<'PY'
+import sys
+from pathlib import Path
+
+env = {}
+for line in Path(sys.argv[1]).read_text().splitlines():
+    line = line.strip()
+    if not line or line.startswith("#") or "=" not in line:
+        continue
+    k, v = line.split("=", 1)
+    env[k.strip()] = v.strip()
+
+pool = env.get("GEMINI_API_KEYS") or env.get("GEMINI_API_KEY") or ""
+keys = list(dict.fromkeys(k.strip() for k in pool.replace(";", ",").split(",") if k.strip()))
+if not keys:
+    raise SystemExit("Не знайдено жодного ключа в .env")
+
+model = env.get("GEMINI_MODEL", "gemini-2.5-flash")
+if "lite" in model:
+    model = "gemini-2.5-flash"
+
+def emit(k, v):
+    print(f"{k}={v}")
+
+emit("KEY_COUNT", str(len(keys)))
+emit("GEMINI_API_KEYS", ",".join(keys))
+emit("GEMINI_MODEL", model)
+emit("DAILY_LIMIT_PER_CLIENT", env.get("DAILY_LIMIT_PER_CLIENT", "300"))
+emit("INTERNAL_RETRY_MS", env.get("INTERNAL_RETRY_MS", "90000"))
+emit("KEY_COOLDOWN_MS", env.get("KEY_COOLDOWN_MS", "30000"))
+PY
+
+# shellcheck disable=SC1090
+source "$DEPLOY_ENV"
 
 if ! command -v "$RENDER_CLI" &>/dev/null; then
   echo "Встановіть Render CLI: curl -fsSL https://raw.githubusercontent.com/render-oss/cli/refs/heads/main/bin/install.sh | sh"
@@ -44,41 +74,36 @@ for row in json.load(sys.stdin):
 
 if [[ -z "$SID" ]]; then
   echo "Сервіс '$SERVICE_NAME' не знайдено на Render."
-  echo "Створіть через: ./scripts/deploy-to-render.sh"
   exit 1
 fi
 
-MODEL="${GEMINI_MODEL:-gemini-2.5-flash}"
-LIMIT="${DAILY_LIMIT_PER_CLIENT:-300}"
-RETRY_MS="${INTERNAL_RETRY_MS:-80000}"
-
-KEYS_VAR="GEMINI_API_KEY=$GEMINI_API_KEY"
-if [[ -n "${GEMINI_API_KEYS:-}" ]]; then
-  KEYS_VAR="GEMINI_API_KEYS=$GEMINI_API_KEYS"
-fi
-
-echo "Оновлюю $SERVICE_NAME ($SID)..."
-"$RENDER_CLI" env-vars set "$SID" $KEYS_VAR GEMINI_MODEL="$MODEL" DAILY_LIMIT_PER_CLIENT="$LIMIT" INTERNAL_RETRY_MS="$RETRY_MS" --confirm
+echo "Оновлюю $SERVICE_NAME ($SID) — $KEY_COUNT ключ(ів), модель $GEMINI_MODEL..."
+"$RENDER_CLI" env-vars set "$SID" \
+  "GEMINI_API_KEYS=$GEMINI_API_KEYS" \
+  "GEMINI_MODEL=$GEMINI_MODEL" \
+  "DAILY_LIMIT_PER_CLIENT=$DAILY_LIMIT_PER_CLIENT" \
+  "INTERNAL_RETRY_MS=$INTERNAL_RETRY_MS" \
+  "KEY_COOLDOWN_MS=$KEY_COOLDOWN_MS" \
+  --confirm
 "$RENDER_CLI" deploys create "$SID" --confirm -o json
 
 HOST="https://${SERVICE_NAME}.onrender.com"
 echo ""
 echo "Deploy запущено. Чекаємо health $HOST/health ..."
 for i in $(seq 1 30); do
-  if curl -sf "$HOST/health" | grep -q '"ok":true'; then
-    BODY="$(curl -sf "$HOST/health")"
+  if BODY="$(curl -sf "$HOST/health" 2>/dev/null)" && echo "$BODY" | grep -q '"ok":true'; then
     echo "OK: $BODY"
-  echo ""
-  echo "Перевірка чату..."
-  curl -sf -X POST "$HOST/v1/chat" \
-    -H "Content-Type: application/json" \
-    -H "X-Client-Id: deploy-test" \
-    -d '{"sources":[],"settings":{},"history":[{"role":"user","content":"OK"}]}' | head -c 200
-  echo ""
-  echo ""
-  echo "Готово. Reload розширення на chrome://extensions"
+    echo ""
+    echo "Перевірка чату..."
+    curl -sf -X POST "$HOST/v1/chat" \
+      -H "Content-Type: application/json" \
+      -H "X-Client-Id: deploy-test" \
+      -d '{"sources":[],"settings":{},"history":[{"role":"user","content":"OK"}]}' | head -c 200
+    echo ""
+    echo ""
+    echo "Готово ($KEY_COUNT ключів на Render). Reload розширення на chrome://extensions"
     exit 0
   fi
   sleep 15
 done
-echo "Deploy ще йде — перевірте $HOST/health через 2–3 хв"
+echo "Deploy ще йде — перевірте $HOST/health (очікується keys: $KEY_COUNT)"

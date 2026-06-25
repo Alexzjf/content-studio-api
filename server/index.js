@@ -1,6 +1,7 @@
 import express from "express";
 import { readFileSync, existsSync } from "fs";
 import { geminiGenerate } from "./gemini.js";
+import { createKeyPool, parseApiKeys } from "./key-pool.js";
 import { buildSystemPrompt, IMAGE_PROMPT } from "./prompts.js";
 
 function loadEnvFile() {
@@ -22,10 +23,8 @@ loadEnvFile();
 const app = express();
 app.use(express.json({ limit: "12mb" }));
 
-const GEMINI_API_KEYS = String(process.env.GEMINI_API_KEYS || process.env.GEMINI_API_KEY || "")
-  .split(/[,;\n]+/)
-  .map((k) => k.trim())
-  .filter(Boolean);
+const GEMINI_API_KEYS = parseApiKeys(process.env.GEMINI_API_KEYS || process.env.GEMINI_API_KEY);
+const keyPool = createKeyPool(GEMINI_API_KEYS);
 const GEMINI_API_KEY = GEMINI_API_KEYS[0] || "";
 const EXTENSION_SECRET = process.env.EXTENSION_SECRET || "";
 const DAILY_LIMIT = Number(process.env.DAILY_LIMIT_PER_CLIENT || 9999);
@@ -92,10 +91,9 @@ function authMiddleware(req, res, next) {
   next();
 }
 
-const API_VERSION = "1.30.0";
-const INTERNAL_RETRY_MS = Number(process.env.INTERNAL_RETRY_MS || 80000);
-
-let keyCursor = 0;
+const API_VERSION = "1.32.0";
+const INTERNAL_RETRY_MS = Number(process.env.INTERNAL_RETRY_MS || 90000);
+const KEY_COOLDOWN_MS = Number(process.env.KEY_COOLDOWN_MS || 30000);
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -104,36 +102,53 @@ function sleep(ms) {
 function isTransientServerError(err) {
   if (err?.code === "RATE_LIMIT") return true;
   const msg = String(err?.message || "");
-  return /тимчасово|зайнят|high demand|quota|rate limit|overloaded|try again|unavailable/i.test(msg);
+  return /тимчасово|зайнят|high demand|quota|rate limit|overloaded|try again|unavailable|resource.?exhausted/i.test(
+    msg
+  );
+}
+
+function isInvalidKeyError(err) {
+  const msg = String(err?.message || "");
+  return /API key not valid|PERMISSION_DENIED|invalid.*api.*key|API key expired/i.test(msg);
 }
 
 async function generateWithKeyRotation(options) {
-  const keys = GEMINI_API_KEYS;
-  if (!keys.length) throw new Error("No Gemini keys configured");
-
   const deadline = Date.now() + INTERNAL_RETRY_MS;
   let lastError = null;
   let round = 0;
 
   while (Date.now() < deadline) {
-    for (let k = 0; k < keys.length; k++) {
-      const keyIndex = (keyCursor + k) % keys.length;
+    const order = keyPool.pickOrder();
+    let triedAny = false;
+
+    for (const keyIndex of order) {
+      triedAny = true;
       try {
-        const text = await geminiGenerate(keys[keyIndex], options);
-        keyCursor = (keyIndex + 1) % keys.length;
+        const text = await geminiGenerate(keyPool.get(keyIndex), {
+          ...options,
+          fastRotate: true,
+        });
+        keyPool.onSuccess(keyIndex);
         return text;
       } catch (err) {
         lastError = err;
+        if (isInvalidKeyError(err)) {
+          keyPool.onInvalid(keyIndex);
+          continue;
+        }
         if (!isTransientServerError(err)) throw err;
-        const waitMs = Math.min(
-          7000,
-          (err.retryAfterSec || 2) * 1000 + round * 400 + k * 200
-        );
-        await sleep(waitMs);
+        keyPool.onRateLimit(keyIndex, KEY_COOLDOWN_MS);
+        // Instant switch to next key — no wait, user sees only "thinking"
       }
     }
+
+    if (!triedAny) {
+      await sleep(400);
+      continue;
+    }
+
     round += 1;
-    await sleep(1200 + round * 600);
+    await sleep(Math.min(2000, 400 + round * 250));
   }
 
   const err = lastError || new Error("Асистент тимчасово зайнятий. Спробуйте ще раз.");
@@ -144,11 +159,12 @@ async function generateWithKeyRotation(options) {
 
 app.get("/health", (_req, res) => {
   res.json({
-    ok: GEMINI_API_KEYS.length > 0,
+    ok: keyPool.size > 0,
     model: DEFAULT_MODEL,
     apiVersion: API_VERSION,
-    keys: GEMINI_API_KEYS.length,
-    fallbacks: ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"],
+    keys: keyPool.size,
+    rotation: "instant-failover",
+    fallbacks: ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite"],
   });
 });
 
@@ -219,7 +235,7 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log(`Content Studio API v${API_VERSION}`);
   console.log(`  Local:   http://localhost:${PORT}`);
   console.log(`  Model:   ${DEFAULT_MODEL}`);
-  console.log(`  Keys:    ${GEMINI_API_KEYS.length} Gemini key(s)`);
+  console.log(`  Keys:    ${keyPool.size} Gemini key(s) (round-robin)`);
   console.log(`  Fallback models: gemini-2.5-flash, gemini-2.0-flash, gemini-2.5-flash-lite`);
   console.log(`  Network: http://0.0.0.0:${PORT}`);
   if (!GEMINI_API_KEYS.length) {

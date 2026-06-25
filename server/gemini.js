@@ -72,11 +72,11 @@ async function callGemini(apiKey, model, payload) {
 
 export async function geminiGenerate(
   apiKey,
-  { model, systemText, history = [], userParts, temperature = 0.85, maxOutputTokens }
+  { model, systemText, history = [], userParts, temperature = 0.85, maxOutputTokens, fastRotate = false }
 ) {
   const preferred = normalizeModel(model);
   const models = [...new Set([preferred, ...FALLBACK_MODELS.map(normalizeModel)])];
-  const maxTries = 5;
+  const maxTries = fastRotate ? 1 : 5;
   let lastError = "Gemini request failed";
   let lastTransient = null;
 
@@ -120,6 +120,7 @@ export async function geminiGenerate(
 
       if (isTransient(response.status, errMsg)) {
         lastTransient = { errMsg, retryAfterSec: retryAfterSec(errMsg) };
+        if (fastRotate) break;
         if (attempt < maxTries - 1) {
           await sleep(backoffMs(attempt));
           continue;
