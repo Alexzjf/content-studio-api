@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "__MSG_extensionName__",
-  "version": "1.34.5",
+  "version": "1.34.8",
   "description": "__MSG_extensionDescription__",
   "default_locale": "en",
   "icons": {
@@ -15,6 +15,8 @@
     "https://content-studio-api-1.onrender.com/*",
     "https://content-studio-api.onrender.com/*",
     "https://*.onrender.com/*",
+    "https://*.koyeb.app/*",
+    "https://*.zeabur.app/*",
     "http://localhost:8787/*",
     "http://127.0.0.1:8787/*",
     "http://localhost:11434/*",
