@@ -49,6 +49,17 @@ function checkRateLimit(clientId) {
   return true;
 }
 
+function trimHistory(history, maxMessages = 16, maxChars = 8000) {
+  return (Array.isArray(history) ? history : [])
+    .filter((h) => h?.role && String(h.content || "").trim())
+    .slice(-maxMessages)
+    .map((h) => {
+      const content = String(h.content);
+      if (content.length <= maxChars) return { role: h.role, content };
+      return { role: h.role, content: `${content.slice(0, maxChars)}…` };
+    });
+}
+
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (origin?.startsWith("chrome-extension://")) {
@@ -81,7 +92,7 @@ function authMiddleware(req, res, next) {
   next();
 }
 
-const API_VERSION = "1.28.0";
+const API_VERSION = "1.29.0";
 
 async function generateWithKeyRotation(options) {
   let lastError = null;
@@ -112,8 +123,9 @@ app.get("/health", (_req, res) => {
 app.post("/v1/chat", authMiddleware, async (req, res) => {
   try {
     const { sources = [], settings = {}, history = [] } = req.body || {};
+    const trimmedHistory = trimHistory(history);
     const hasSources = sources.some((s) => s?.content?.trim());
-    const hasMessage = history.some((h) => h?.content?.trim());
+    const hasMessage = trimmedHistory.some((h) => h?.content?.trim());
     if (!hasSources && !hasMessage) {
       return res.status(400).json({ error: "Message required" });
     }
@@ -121,7 +133,7 @@ app.post("/v1/chat", authMiddleware, async (req, res) => {
     const text = await generateWithKeyRotation({
       model: settings.geminiModel || DEFAULT_MODEL,
       systemText,
-      history,
+      history: trimmedHistory,
       temperature: settings.temperature ?? 0.75,
       maxOutputTokens: settings.maxOutputTokens,
     });

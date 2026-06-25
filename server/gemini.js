@@ -44,6 +44,9 @@ function formatUserError(errMsg) {
   if (/not found|not supported|does not exist/i.test(errMsg)) {
     return "Модель асистента недоступна. Спробуйте ще раз.";
   }
+  if (/PERMISSION_DENIED|API key not valid|blocked/i.test(errMsg)) {
+    return "Асистент тимчасово недоступний. Спробуйте ще раз.";
+  }
   if (isTransient(429, errMsg)) {
     return "Асистент тимчасово зайнятий. Спробуйте ще раз.";
   }
@@ -73,7 +76,7 @@ export async function geminiGenerate(
 ) {
   const preferred = normalizeModel(model);
   const models = [...new Set([preferred, ...FALLBACK_MODELS.map(normalizeModel)])];
-  const maxTries = 3;
+  const maxTries = 4;
   let lastError = "Gemini request failed";
   let lastTransient = null;
 
