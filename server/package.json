@@ -1,8 +1,11 @@
 {
   "name": "content-studio-api",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.30.0",
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node index.js",
     "dev": "node --watch index.js"
