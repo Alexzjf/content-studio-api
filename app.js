@@ -1,4 +1,4 @@
-const APP_VERSION = "1.34.0";
+const APP_VERSION = "1.34.5";
 
 let chatStatusTicker = null;
 let hostedWarmAt = 0;
@@ -13,19 +13,9 @@ function clearChatStatusTicker() {
   }
 }
 
-function startChatStatusTicker(provider, model) {
+function startChatStatusTicker(_provider, _model) {
   clearChatStatusTicker();
-  const started = Date.now();
-  let providerLabel =
-    globalThis.OWN_AI_PROVIDERS?.[provider]?.providerLabel || provider || "AI";
-  if (provider === "hosted") {
-    providerLabel = uiLang === "uk" ? "Gemini (спільний)" : "Gemini (shared)";
-  }
-  chatStatusTicker = setInterval(() => {
-    const sec = Math.round((Date.now() - started) / 1000);
-    const modelBit = model && provider === "cursor" ? ` · ${model}` : "";
-    setStatus(`${t("aiThinking")} ${providerLabel}${modelBit} · ${sec}с`, "");
-  }, 1000);
+  setStatus(t("aiThinking"), "");
 }
 
 const DEFAULT_SETTINGS = {
@@ -831,34 +821,37 @@ function migrateAiSettings(settings) {
   if (s.deepseekApiKey) keys.deepseek = s.deepseekApiKey;
   s.ownApiKeys = keys;
 
-  const hasAnyOwnKey = Object.values(keys).some((k) => String(k || "").trim());
-  if (s.aiConnectionMode) {
-    if (hasAnyOwnKey && s.aiConnectionMode === "shared") {
-      s.aiConnectionMode = "own";
+  if (s.aiConnectionMode === "shared" || s.aiConnectionMode === "own") {
+    if (s.aiConnectionMode === "own" && !s.aiOwnProvider) {
+      s.aiOwnProvider =
+        s.aiProvider && s.aiProvider !== "hosted" ? s.aiProvider : DEFAULT_SETTINGS.aiOwnProvider;
     }
     return s;
   }
 
+  if (s.aiProvider === "hosted") {
+    s.aiConnectionMode = "shared";
+    return s;
+  }
+
+  const hasAnyOwnKey = Object.values(keys).some((k) => String(k || "").trim());
   if (
     hasAnyOwnKey ||
-    s.aiProvider === "gemini" ||
-    s.aiProvider === "openrouter" ||
-    s.aiProvider === "openai" ||
-    s.aiProvider === "anthropic" ||
-    s.aiProvider === "cursor" ||
-    s.aiProvider === "groq" ||
-    s.aiProvider === "mistral" ||
-    s.aiProvider === "deepseek"
+    (s.aiProvider &&
+      s.aiProvider !== "hosted" &&
+      ["gemini", "openrouter", "openai", "anthropic", "cursor", "groq", "mistral", "deepseek"].includes(
+        s.aiProvider
+      ))
   ) {
     s.aiConnectionMode = "own";
     s.aiOwnProvider =
       s.aiOwnProvider ||
-      (s.aiProvider && s.aiProvider !== "hosted" ? s.aiProvider : "gemini");
+      (s.aiProvider && s.aiProvider !== "hosted" ? s.aiProvider : DEFAULT_SETTINGS.aiOwnProvider);
     s.ownModels = { ...(s.ownModels || {}) };
     if (s.geminiModel) s.ownModels.gemini = s.geminiModel;
     if (s.openrouterModel) s.ownModels.openrouter = s.openrouterModel;
   } else {
-    s.aiConnectionMode = "own";
+    s.aiConnectionMode = "shared";
   }
   return s;
 }
@@ -912,7 +905,23 @@ function saveCurrentOwnToCache() {
   const p = getAiOwnProvider();
   if (!p) return;
   ownApiKeysCache[p] = $("ownApiKey")?.value?.trim() || "";
-  ownModelsCache[p] = $("ownModel")?.value?.trim() || "";
+}
+
+function getOwnModelValue(provider) {
+  const p = provider || getAiOwnProvider();
+  const meta = globalThis.OWN_AI_PROVIDERS?.[p];
+  let m = ownModelsCache[p]?.trim() || meta?.defaultModel || "";
+  if (p === "cursor") m = normalizeCursorModelSetting(m);
+  return m;
+}
+
+function ensureOwnModelDefaults(provider) {
+  const p = provider || getAiOwnProvider();
+  const meta = globalThis.OWN_AI_PROVIDERS?.[p];
+  if (!ownModelsCache[p]?.trim() && meta?.defaultModel) {
+    ownModelsCache[p] =
+      p === "cursor" ? normalizeCursorModelSetting(meta.defaultModel) : meta.defaultModel;
+  }
 }
 
 function ensureOwnConnectionMode() {
@@ -926,10 +935,9 @@ function ensureOwnConnectionMode() {
 function syncOwnProviderFieldsFromCache() {
   const p = getAiOwnProvider();
   const meta = globalThis.OWN_AI_PROVIDERS?.[p];
+  ensureOwnModelDefaults(p);
   const keyEl = $("ownApiKey");
-  const modelEl = $("ownModel");
   if (keyEl) keyEl.value = ownApiKeysCache[p] || "";
-  if (modelEl) modelEl.value = ownModelsCache[p] || meta?.defaultModel || "";
 
   const hint = $("ownApiKeyHint");
   if (hint && meta) {
@@ -946,15 +954,6 @@ function syncOwnProviderFieldsFromCache() {
       hint.textContent = hintText;
     }
   }
-  const list = $("ownModelsList");
-  if (list) {
-    list.innerHTML = "";
-    for (const m of meta?.models || []) {
-      const opt = document.createElement("option");
-      opt.value = m;
-      list.appendChild(opt);
-    }
-  }
 }
 
 function isAiConfigured() {
@@ -965,23 +964,10 @@ function isAiConfigured() {
 
 function updateAiProviderUI() {
   const shared = getAiConnectionMode() === "shared";
+  const own = !shared;
   $("aiSharedHint")?.classList.toggle("hidden", !shared);
   $("aiOwnBlock")?.classList.toggle("hidden", shared);
-  $("aiModeHint")?.classList.toggle("hidden", shared);
-
-  const hint = $("aiModeHint");
-  if (hint && !shared) {
-    if (!isAiConfigured()) {
-      hint.textContent = t("aiOwnFlowHint");
-    } else if (getAiOwnProvider() === "cursor") {
-      hint.textContent = t("cursorSlowHint");
-    } else {
-      const p = getAiOwnProvider();
-      const meta = globalThis.OWN_AI_PROVIDERS?.[p];
-      const name = meta?.[uiLang === "uk" ? "labelUk" : "labelEn"] || p;
-      hint.textContent = t("aiOnHintOwnProvider").replace("{provider}", name);
-    }
-  }
+  $("aiModeHint")?.classList.toggle("hidden", shared || own);
 
   if (!shared) syncOwnProviderFieldsFromCache();
 }
@@ -1016,7 +1002,7 @@ async function testOwnApi() {
     );
     setStatus(t("testApiOk").replace("{reply}", String(reply).slice(0, 80)), "success");
   } catch (err) {
-    setStatus(err?.message || "API test failed", "error");
+    setStatus(formatOwnApiError(err?.message, provider), "error");
   } finally {
     clearTimeout(testTimer);
     setBusy(false);
@@ -1068,12 +1054,12 @@ async function saveSettings() {
 
 async function getSettings() {
   saveCurrentOwnToCache();
+  ensureOwnModelDefaults(getAiOwnProvider());
   const provider = resolveAiProvider();
   if (provider === "cursor") {
-    const fixed = normalizeCursorModelSetting(ownModelsCache.cursor || $("ownModel")?.value);
-    ownModelsCache.cursor = fixed;
-    if ($("ownModel") && $("ownModel").value !== fixed) $("ownModel").value = fixed;
+    ownModelsCache.cursor = normalizeCursorModelSetting(ownModelsCache.cursor || "composer-2.5");
   }
+  const activeModel = getOwnModelValue();
   return {
     ...DEFAULT_SETTINGS,
     uiLang: window.AppChrome?.getUiLang() || getUiLang(),
@@ -1083,15 +1069,15 @@ async function getSettings() {
     ownApiKeys: { ...ownApiKeysCache },
     ownModels: { ...ownModelsCache },
     ownApiKey: $("ownApiKey")?.value?.trim() ?? "",
-    ownModel: $("ownModel")?.value?.trim() ?? "",
+    ownModel: activeModel,
     hostedApiUrl:
       typeof EXTENSION_CONFIG !== "undefined"
         ? EXTENSION_CONFIG.hostedApiUrl
         : DEFAULT_SETTINGS.hostedApiUrl,
     geminiApiKey: ownApiKeysCache.gemini ?? "",
-    geminiModel: ownModelsCache.gemini ?? DEFAULT_SETTINGS.geminiModel,
+    geminiModel: getOwnModelValue("gemini") || DEFAULT_SETTINGS.geminiModel,
     openrouterApiKey: ownApiKeysCache.openrouter ?? "",
-    openrouterModel: ownModelsCache.openrouter ?? DEFAULT_SETTINGS.openrouterModel,
+    openrouterModel: getOwnModelValue("openrouter") || DEFAULT_SETTINGS.openrouterModel,
     openaiApiKey: ownApiKeysCache.openai ?? "",
     anthropicApiKey: ownApiKeysCache.anthropic ?? "",
     cursorApiKey: ownApiKeysCache.cursor ?? "",
@@ -1139,7 +1125,7 @@ function bindEvents() {
       updateChatState();
       if (getAiConnectionMode() === "shared") {
         hostedWarmAt = 0;
-        void warmHostedServer({ showStatus: true });
+        void warmHostedServer({ showStatus: false });
         startHostedKeepAlive();
       } else {
         stopHostedKeepAlive();
@@ -1153,7 +1139,6 @@ function bindEvents() {
   $("aiOwnProvider")?.addEventListener("change", () => {
     const prev = ownProviderBeforeChange || getAiOwnProvider();
     ownApiKeysCache[prev] = $("ownApiKey")?.value?.trim() || "";
-    ownModelsCache[prev] = $("ownModel")?.value?.trim() || "";
     ownProviderBeforeChange = getAiOwnProvider();
     syncOwnProviderFieldsFromCache();
     updateAiProviderUI();
@@ -1182,11 +1167,6 @@ function bindEvents() {
       }
     });
   });
-  $("ownModel")?.addEventListener("blur", () => {
-    saveCurrentOwnToCache();
-    void saveSettingsQuiet();
-  });
-
   $("testApiBtn")?.addEventListener("click", () => void testOwnApi());
 
   $("mediaInput")?.addEventListener("change", (e) => {
@@ -1479,11 +1459,35 @@ function escapeHtml(str) {
     .replace(/"/g, "&quot;");
 }
 
+function getOwnProviderLabel(provider) {
+  const p = provider || getAiOwnProvider();
+  const meta = globalThis.OWN_AI_PROVIDERS?.[p];
+  return meta?.[uiLang === "uk" ? "labelUk" : "labelEn"] || p || "AI";
+}
+
+function formatOwnApiError(message, provider) {
+  const msg = String(message || "");
+  const name = getOwnProviderLabel(provider);
+  if (/exceeded your current quota|insufficient_quota|billing details|payment required/i.test(msg)) {
+    return t("ownApiQuotaExceeded").replace("{provider}", name);
+  }
+  if (/invalid.*api.*key|incorrect api key|authentication|unauthorized|invalid_api_key/i.test(msg)) {
+    return t("ownApiKeyInvalid").replace("{provider}", name);
+  }
+  if (/rate limit|too many requests|429/i.test(msg)) {
+    return t("ownApiRateLimit").replace("{provider}", name);
+  }
+  if (msg.length > 100) {
+    return `${name}: ${msg.slice(0, 88)}…`;
+  }
+  return /^[A-Za-z ]+:/.test(msg) ? msg : `${name}: ${msg}`;
+}
+
 function setStatus(text, type = "") {
   const ownMode = getAiConnectionMode() === "own";
   if (type === "error" && (!text || text === "__silent_ai__")) {
     text = ownMode
-      ? "AI не відповів. Перевірте API ключ і модель у Налаштуваннях."
+      ? "AI не відповів. Перевірте API ключ у Налаштуваннях."
       : t("aiSharedUnavailable");
   }
   if (type === "error" && !ownMode && shouldSuppressStatusError(text)) {
@@ -1495,7 +1499,7 @@ function setStatus(text, type = "") {
     el.className = `status ${type}`.trim();
     el.classList.toggle("hidden", !text);
   }
-  if (type === "error" && !ownMode) {
+  if (type === "error") {
     window.AppChrome?.setHeaderStatus("", "");
   } else {
     window.AppChrome?.setHeaderStatus(text, type);
@@ -1612,7 +1616,7 @@ function reloadAssistant() {
 
 function getActiveAiLabel() {
   if (getAiConnectionMode() === "shared") {
-    return uiLang === "uk" ? "Google Gemini (спільний)" : "Google Gemini (shared)";
+    return uiLang === "uk" ? "Спільний асистент" : "Shared assistant";
   }
   const p = getAiOwnProvider();
   const meta = globalThis.OWN_AI_PROVIDERS?.[p];
@@ -2009,7 +2013,14 @@ async function sendChatMessage(text, options = {}) {
     if (msg === "__silent_ai__" || (getAiConnectionMode() === "shared" && isSharedQuotaError(err))) {
       flashSharedUnavailable();
     } else if (msg) {
-      setStatus(msg, "error");
+      const display =
+        getAiConnectionMode() === "own"
+          ? formatOwnApiError(msg, getAiOwnProvider())
+          : msg;
+      setStatus(display, "error");
+      if (getAiConnectionMode() === "own") {
+        setTimeout(() => setStatus("", ""), 5000);
+      }
     } else if (getAiConnectionMode() === "own") {
       setStatus(
         "AI не відповів. Перевірте API ключ, модель composer-2.5 і Reload розширення.",
