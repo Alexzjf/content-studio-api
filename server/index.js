@@ -22,10 +22,14 @@ loadEnvFile();
 const app = express();
 app.use(express.json({ limit: "12mb" }));
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
+const GEMINI_API_KEYS = String(process.env.GEMINI_API_KEYS || process.env.GEMINI_API_KEY || "")
+  .split(/[,;\n]+/)
+  .map((k) => k.trim())
+  .filter(Boolean);
+const GEMINI_API_KEY = GEMINI_API_KEYS[0] || "";
 const EXTENSION_SECRET = process.env.EXTENSION_SECRET || "";
 const DAILY_LIMIT = Number(process.env.DAILY_LIMIT_PER_CLIENT || 9999);
-const DEFAULT_MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash";
+const DEFAULT_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 const PORT = Number(process.env.PORT || 8787);
 
 const usage = new Map();
@@ -58,7 +62,7 @@ app.use((req, res, next) => {
 });
 
 function authMiddleware(req, res, next) {
-  if (!GEMINI_API_KEY) {
+  if (!GEMINI_API_KEYS.length) {
     return res.status(503).json({ error: "Server missing GEMINI_API_KEY" });
   }
   if (EXTENSION_SECRET) {
@@ -77,13 +81,30 @@ function authMiddleware(req, res, next) {
   next();
 }
 
-const API_VERSION = "1.27.2";
+const API_VERSION = "1.28.0";
+
+async function generateWithKeyRotation(options) {
+  let lastError = null;
+  for (let i = 0; i < GEMINI_API_KEYS.length; i++) {
+    try {
+      return await geminiGenerate(GEMINI_API_KEYS[i], options);
+    } catch (err) {
+      lastError = err;
+      if (err.code === "RATE_LIMIT" && i < GEMINI_API_KEYS.length - 1) {
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastError || new Error("Gemini unavailable");
+}
 
 app.get("/health", (_req, res) => {
   res.json({
-    ok: true,
+    ok: GEMINI_API_KEYS.length > 0,
     model: DEFAULT_MODEL,
     apiVersion: API_VERSION,
+    keys: GEMINI_API_KEYS.length,
     fallbacks: ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"],
   });
 });
@@ -97,7 +118,7 @@ app.post("/v1/chat", authMiddleware, async (req, res) => {
       return res.status(400).json({ error: "Message required" });
     }
     const systemText = buildSystemPrompt(sources, settings);
-    const text = await geminiGenerate(GEMINI_API_KEY, {
+    const text = await generateWithKeyRotation({
       model: settings.geminiModel || DEFAULT_MODEL,
       systemText,
       history,
@@ -126,7 +147,7 @@ app.post("/v1/describe-image", authMiddleware, async (req, res) => {
     if (!imageBase64) {
       return res.status(400).json({ error: "imageBase64 required" });
     }
-    const text = await geminiGenerate(GEMINI_API_KEY, {
+    const text = await generateWithKeyRotation({
       model: settings.geminiModel || DEFAULT_MODEL,
       userParts: [
         { text: IMAGE_PROMPT },
@@ -154,9 +175,10 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log(`Content Studio API v${API_VERSION}`);
   console.log(`  Local:   http://localhost:${PORT}`);
   console.log(`  Model:   ${DEFAULT_MODEL}`);
-  console.log(`  Fallback: gemini-2.5-flash-lite, gemini-2.0-flash (no 1.5)`);
-  console.log(`  Network: http://0.0.0.0:${PORT} (use tunnel to expose to internet)`);
-  if (!GEMINI_API_KEY) {
-    console.warn("Warning: set GEMINI_API_KEY in server/.env");
+  console.log(`  Keys:    ${GEMINI_API_KEYS.length} Gemini key(s)`);
+  console.log(`  Fallback models: gemini-2.5-flash, gemini-2.0-flash, gemini-2.5-flash-lite`);
+  console.log(`  Network: http://0.0.0.0:${PORT}`);
+  if (!GEMINI_API_KEYS.length) {
+    console.warn("Warning: set GEMINI_API_KEY in server/.env or Render Environment");
   }
 });

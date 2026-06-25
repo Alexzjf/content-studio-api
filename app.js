@@ -1,14 +1,48 @@
-const APP_VERSION = "1.27.2";
+const APP_VERSION = "1.34.0";
+
+let chatStatusTicker = null;
+let hostedWarmAt = 0;
+let hostedWarmPromise = null;
+let hostedKeepAliveTimer = null;
+const HOSTED_WARM_TTL_MS = 4 * 60 * 1000;
+
+function clearChatStatusTicker() {
+  if (chatStatusTicker) {
+    clearInterval(chatStatusTicker);
+    chatStatusTicker = null;
+  }
+}
+
+function startChatStatusTicker(provider, model) {
+  clearChatStatusTicker();
+  const started = Date.now();
+  let providerLabel =
+    globalThis.OWN_AI_PROVIDERS?.[provider]?.providerLabel || provider || "AI";
+  if (provider === "hosted") {
+    providerLabel = uiLang === "uk" ? "Gemini (спільний)" : "Gemini (shared)";
+  }
+  chatStatusTicker = setInterval(() => {
+    const sec = Math.round((Date.now() - started) / 1000);
+    const modelBit = model && provider === "cursor" ? ` · ${model}` : "";
+    setStatus(`${t("aiThinking")} ${providerLabel}${modelBit} · ${sec}с`, "");
+  }, 1000);
+}
 
 const DEFAULT_SETTINGS = {
   uiLang: "en",
+  aiConnectionMode: "own",
+  aiOwnProvider: "gemini",
+  ownApiKeys: {},
+  ownModels: {},
   aiProvider: "hosted",
   hostedApiUrl:
     typeof EXTENSION_CONFIG !== "undefined" ? EXTENSION_CONFIG.hostedApiUrl : "http://localhost:8787",
   geminiApiKey: "",
   geminiModel: "gemini-2.5-flash-lite",
   openrouterApiKey: "",
-  openrouterModel: "google/gemini-2.0-flash-exp:free",
+  openrouterModel: "anthropic/claude-3.5-haiku",
+  openaiApiKey: "",
+  anthropicApiKey: "",
   whisperLang: "auto",
   postLang: "uk",
   postStyle: "punchy",
@@ -24,8 +58,14 @@ const DEFAULT_SETTINGS = {
 let sources = [];
 let chatHistory = [];
 let isBusy = false;
+let activeChatAbort = null;
+let chatOpGen = 0;
+const CHAT_HISTORY_KEY = "chatHistorySnapshot";
 let sourceIdCounter = 0;
 let uiLang = "en";
+let ownApiKeysCache = {};
+let ownModelsCache = {};
+let ownProviderBeforeChange = "";
 
 const SOURCE_ICONS = {
   video: "🎬",
@@ -45,27 +85,28 @@ function t(key, vars) {
 }
 
 function runtimeSend(message) {
-  return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage(message, (response) => {
-      const err = chrome.runtime.lastError;
-      if (err) {
-        const msg = err.message || "Extension error";
-        reject(
-          new Error(
-            msg.includes("parsed") || msg.includes("empty")
-              ? "Зв’язок з розширенням перервався. Reload на chrome://extensions"
-              : msg
-          )
-        );
-        return;
-      }
-      if (!response) {
-        reject(new Error("Розширення не відповіло. Reload на chrome://extensions"));
-        return;
-      }
-      resolve(response);
+  if (typeof globalThis.extensionRuntimeSend === "function") {
+    return globalThis.extensionRuntimeSend(message);
+  }
+  if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage(message, (response) => {
+        const err = chrome.runtime.lastError;
+        if (err) {
+          reject(new Error(err.message || "Extension error"));
+          return;
+        }
+        if (!response) {
+          reject(new Error("Розширення не відповіло"));
+          return;
+        }
+        resolve(response);
+      });
     });
-  });
+  }
+  return Promise.reject(
+    new Error("API Chrome недоступний. Перезавантажте розширення на chrome://extensions")
+  );
 }
 
 function getHostedApiBase(settings) {
@@ -78,10 +119,13 @@ function getHostedApiBase(settings) {
 function getHostedApiBases(settings) {
   const primary = getHostedApiBase(settings);
   const bases = [primary];
-  if (!/localhost|127\.0\.0\.1/.test(primary)) {
+  const allowLocal =
+    (typeof EXTENSION_CONFIG !== "undefined" && EXTENSION_CONFIG.localDevFallback === true) ||
+    settings?.localDevFallback === true;
+  if (allowLocal && !/localhost|127\.0\.0\.1/.test(primary)) {
     bases.push("http://localhost:8787");
   }
-  return [...new Set(bases)];
+  return bases;
 }
 
 function hostedApiHeaders(base) {
@@ -95,26 +139,35 @@ function hostedApiHeaders(base) {
   return headers;
 }
 
+function shouldSuppressStatusError(text) {
+  const msg = String(text || "");
+  if (msg === "__silent_ai__") return true;
+  return /importScripts|WorkerGlobalScope|service worker/i.test(msg);
+}
+
 function formatApiError(status, data, base) {
   const raw = data?.error || "";
   if (/Ліміт сервера|Daily limit reached/i.test(raw)) {
-    return raw;
+    return t("aiSharedUnavailable");
+  }
+  if (/Ліміт Gemini|quota|rate limit|resource.?exhausted|зайнят|overloaded|хмарн/i.test(raw)) {
+    return t("aiSharedUnavailable");
   }
   if (/gemini-1\.5|not found for API version|not supported for generateContent/i.test(raw)) {
     return "Сервер AI застарів. Перезапустіть у терміналі: cd server && npm start";
   }
   if (/high demand|overloaded|try again later/i.test(raw)) {
-    return "Gemini перевантажений. Зачекайте 30–60 сек і натисніть ще раз.";
+    return t("aiSharedUnavailable");
   }
   if (status === 503) {
     if (base.includes("localhost") || base.includes("127.0.0.1")) {
       return "Локальний сервер AI не запущений. У терміналі: cd server && npm start";
     }
-    return t("serverOffline");
+    return t("aiSharedUnavailable");
   }
   if (status === 502 && raw) {
-    if (/Ліміт Gemini|quota|rate limit|resource.?exhausted/i.test(raw)) {
-      return raw;
+    if (/Ліміт Gemini|quota|rate limit|resource.?exhausted|зайнят/i.test(raw)) {
+      return t("aiSharedUnavailable");
     }
     return raw;
   }
@@ -124,14 +177,16 @@ function formatApiError(status, data, base) {
     }
     return t("serverWrongUrl");
   }
-  if (status === 429 && /Ліміт сервера/i.test(raw)) return raw;
+  if (status === 429) {
+    return t("aiSharedUnavailable");
+  }
   return raw || `API помилка (${status})`;
 }
 
 function wrapNetworkError(err) {
   const msg = err?.message || String(err);
   if (/failed to fetch|networkerror|network error|load failed|err_connection_refused/i.test(msg)) {
-    return new Error(t("serverOffline"));
+    return new Error("__silent_ai__");
   }
   return err instanceof Error ? err : new Error(msg);
 }
@@ -152,18 +207,23 @@ function retryWaitSec(_status, _data, _raw) {
   return 2;
 }
 
-async function hostedApiPost(path, body, settings, timeoutMs = 28000) {
+async function hostedApiPost(path, body, settings, timeoutMs = 45000, externalSignal) {
   const bases = getHostedApiBases(settings);
-  const deadline = Date.now() + 38000;
+  const deadline = Date.now() + 60000;
   let lastError = null;
 
   for (const base of bases) {
     for (let rateTry = 0; rateTry < 2; rateTry++) {
+      if (externalSignal?.aborted) {
+        throw new Error("__chat_aborted__");
+      }
       if (Date.now() >= deadline) {
-        throw new Error(t("aiBusyUseOwnKey"));
+        throw new Error(t("aiSharedBusy"));
       }
       const remaining = Math.max(5000, deadline - Date.now());
       const controller = new AbortController();
+      const onExternalAbort = () => controller.abort();
+      externalSignal?.addEventListener("abort", onExternalAbort, { once: true });
       const timeout = setTimeout(() => controller.abort(), Math.min(timeoutMs, remaining));
       try {
         const response = await fetch(`${base}${path}`, {
@@ -177,81 +237,166 @@ async function hostedApiPost(path, body, settings, timeoutMs = 28000) {
           const raw = data?.error || "";
           if (isRetryableAiError(response.status, raw) && rateTry === 0 && Date.now() < deadline) {
             const sec = retryWaitSec(response.status, data, raw);
-            setStatus(t("rateLimitWait", { sec }));
+            setStatus(t("aiThinking"));
             await new Promise((r) => setTimeout(r, sec * 1000 + 200));
             continue;
           }
           const err = new Error(formatApiError(response.status, data, base));
-          if ((response.status === 503 || response.status === 404) && bases.length > 1) {
+          const baseIdx = bases.indexOf(base);
+          const hasNextBase = baseIdx >= 0 && baseIdx < bases.length - 1;
+          if (hasNextBase && (response.status === 429 || response.status === 503 || isRetryableAiError(response.status, raw))) {
+            lastError = err;
+            break;
+          }
+          if ((response.status === 503 || response.status === 404) && hasNextBase) {
             lastError = err;
             break;
           }
           if (isRetryableAiError(response.status, raw)) {
-            throw new Error(t("aiBusyUseOwnKey"));
+            if (rateTry < 1 && Date.now() < deadline) {
+              setStatus(t("aiThinking"));
+              await new Promise((r) => setTimeout(r, retryWaitSec(response.status, data, raw) * 1000 + 300));
+              continue;
+            }
+            throw new Error(t("aiSharedBusy"));
           }
           throw err;
         }
         return data;
       } catch (err) {
+        if (externalSignal?.aborted || err.message === "__chat_aborted__") {
+          throw new Error("__chat_aborted__");
+        }
         if (err.name === "AbortError") {
           throw new Error(t("aiTimeout"));
         }
-        if (bases.length > 1 && /503|fetch|tunnel/i.test(err.message)) {
+        if (bases.length > 1 && /503|fetch|tunnel|localhost|127\.0\.0\.1|Failed to fetch/i.test(err.message)) {
           lastError = wrapNetworkError(err);
           break;
         }
         throw wrapNetworkError(err);
       } finally {
         clearTimeout(timeout);
+        externalSignal?.removeEventListener("abort", onExternalAbort);
       }
     }
   }
 
-  throw lastError || new Error(t("serverOffline"));
+  throw lastError || new Error(t("aiSharedBusy"));
 }
 
-async function checkAiServer() {
-  const provider = $("aiProvider")?.value || "hosted";
-  if (provider !== "hosted") return;
-  const settings = await getSettings();
-  const bases = getHostedApiBases(settings);
-  let cloudBad = false;
+async function warmHostedServer(options = {}) {
+  if (getAiConnectionMode() !== "shared") return true;
+  if (Date.now() - hostedWarmAt < HOSTED_WARM_TTL_MS) return true;
+  if (hostedWarmPromise) return hostedWarmPromise;
 
-  for (const base of bases) {
-    try {
-      const r = await fetch(`${base}/health`, { signal: AbortSignal.timeout(4000) });
-      if (!r.ok) throw new Error("bad health");
-      const data = await r.json();
-      if (!data.ok) {
-        if (!/localhost|127\.0\.0\.1/.test(base)) {
-          cloudBad = true;
-          continue;
+  const showStatus = options.showStatus === true;
+  hostedWarmPromise = (async () => {
+    const settings = await getSettings();
+    const bases = getHostedApiBases(settings);
+    if (showStatus) setStatus(t("serverWaking"), "");
+
+    for (const base of bases) {
+      try {
+        const r = await fetch(`${base}/health`, {
+          signal: AbortSignal.timeout(90000),
+          headers: hostedApiHeaders(base),
+        });
+        if (!r.ok) continue;
+        const data = await r.json().catch(() => ({}));
+        if (data.ok !== false) {
+          hostedWarmAt = Date.now();
+          if (showStatus) {
+            setStatus(t("serverReady"), "success");
+            setTimeout(() => setStatus("", ""), 1800);
+          }
+          return true;
         }
-        throw new Error("wrong api");
+      } catch (err) {
+        console.warn("warmHostedServer", base, err?.message || err);
       }
-      if (data.apiVersion && data.apiVersion < "1.27.1") {
-        setStatus(t("serverOutdated"), "error");
-        return;
-      }
-      if (cloudBad && /localhost|127\.0\.0\.1/.test(base)) {
-        setStatus(t("serverCloudFallback"), "success");
-      }
-      return;
-    } catch {
-      if (/localhost|127\.0\.0\.1/.test(base)) {
-        setStatus(t("serverOffline"), "error");
-        return;
-      }
-      cloudBad = true;
     }
-  }
-  if (cloudBad) setStatus(t("serverWrongUrl"), "error");
+    return false;
+  })().finally(() => {
+    hostedWarmPromise = null;
+  });
+
+  return hostedWarmPromise;
 }
 
-async function hostedChatDirect(sources, settings, history) {
-  const data = await hostedApiPost("/v1/chat", { sources, settings, history }, settings);
-  if (!data.text?.trim()) throw new Error("Empty AI response");
-  return data.text.trim();
+function startHostedKeepAlive() {
+  if (hostedKeepAliveTimer) clearInterval(hostedKeepAliveTimer);
+  if (getAiConnectionMode() !== "shared") return;
+  hostedKeepAliveTimer = setInterval(
+    () => void warmHostedServer({ showStatus: false }),
+    HOSTED_WARM_TTL_MS - 45 * 1000
+  );
+}
+
+function stopHostedKeepAlive() {
+  if (hostedKeepAliveTimer) {
+    clearInterval(hostedKeepAliveTimer);
+    hostedKeepAliveTimer = null;
+  }
+}
+
+function getSharedDirectGeminiKey() {
+  const cfg =
+    typeof EXTENSION_CONFIG !== "undefined" ? EXTENSION_CONFIG.sharedGeminiApiKey : "";
+  return String(cfg || "").trim();
+}
+
+function isSharedQuotaError(err) {
+  const msg = String(err?.message || "");
+  return (
+    msg === "__silent_ai__" ||
+    /quota|ліміт|зайнят|busy|429|rate limit|resource.?exhausted|хмарн.*gemini|shared gemini/i.test(
+      msg
+    )
+  );
+}
+
+async function callSharedGeminiDirect(sources, settings, history, signal, apiKey) {
+  await ensureAiReady();
+  const fn = getAiChatFn();
+  if (typeof fn !== "function") {
+    throw new Error("__no_ai_client__");
+  }
+  const directSettings = {
+    ...settings,
+    aiProvider: "gemini",
+    ownApiKeys: { ...(settings.ownApiKeys || {}), gemini: apiKey },
+    geminiModel:
+      settings.geminiModel || settings.ownModels?.gemini || "gemini-2.5-flash",
+  };
+  return fn(sources, directSettings, history, signal);
+}
+
+async function hostedChatDirect(sources, settings, history, signal) {
+  const directKey = getSharedDirectGeminiKey();
+  if (directKey) {
+    return callSharedGeminiDirect(sources, settings, history, signal, directKey);
+  }
+
+  if (Date.now() - hostedWarmAt >= HOSTED_WARM_TTL_MS) {
+    setStatus(t("serverWaking"), "");
+    await warmHostedServer({ showStatus: false });
+  }
+  try {
+    const data = await hostedApiPost("/v1/chat", { sources, settings, history }, settings, 28000, signal);
+    if (!data.text?.trim()) throw new Error("Empty AI response");
+    return data.text.trim();
+  } catch (err) {
+    const fallbackKey = ownApiKeysCache.gemini?.trim();
+    if (fallbackKey && isSharedQuotaError(err)) {
+      setStatus(t("aiSharedFallbackOwnKey"), "");
+      return callSharedGeminiDirect(sources, settings, history, signal, fallbackKey);
+    }
+    if (isSharedQuotaError(err)) {
+      throw new Error(t("aiSharedUnavailable"));
+    }
+    throw err;
+  }
 }
 
 async function hostedDescribeDirect(imageBase64, settings) {
@@ -260,58 +405,229 @@ async function hostedDescribeDirect(imageBase64, settings) {
   return data.text.trim();
 }
 
+function mergeAbortSignals(userSignal, timeoutMs) {
+  if (!timeoutMs || timeoutMs <= 0) return userSignal;
+  const controller = new AbortController();
+  const onAbort = () => controller.abort();
+  userSignal?.addEventListener("abort", onAbort, { once: true });
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  controller.signal.addEventListener(
+    "abort",
+    () => {
+      clearTimeout(timer);
+      userSignal?.removeEventListener("abort", onAbort);
+    },
+    { once: true }
+  );
+  if (userSignal?.aborted) controller.abort();
+  return controller.signal;
+}
+
 function getAiChatFn() {
-  return globalThis.chatWithSources;
+  return globalThis.chatWithSources || (typeof window !== "undefined" ? window.chatWithSources : undefined);
 }
 
 function getAiDescribeFn() {
-  return globalThis.describeImage;
+  return globalThis.describeImage || (typeof window !== "undefined" ? window.describeImage : undefined);
 }
 
-async function callChatWithSources(sources, settings, history) {
-  const fn = getAiChatFn();
-  const run = async (s) => {
-    if (typeof fn === "function") {
-      return fn(sources, s, history);
+function extensionScriptUrl(name) {
+  if (typeof chrome?.runtime?.getURL === "function") {
+    return chrome.runtime.getURL(name);
+  }
+  return new URL(name, location.href).href;
+}
+
+function loadExtensionScript(name) {
+  const url = extensionScriptUrl(name);
+  const existing = [...document.querySelectorAll("script[src]")].find(
+    (s) => s.src === url || s.src.endsWith(`/${name}`)
+  );
+  if (existing) {
+    existing.dataset.csxAi = name;
+    if (!existing.dataset.loaded) existing.dataset.loaded = "1";
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = url;
+    s.dataset.csxAi = name;
+    s.onload = () => {
+      s.dataset.loaded = "1";
+      resolve();
+    };
+    s.onerror = () => reject(new Error(`${name} load failed`));
+    document.head.appendChild(s);
+  });
+}
+
+async function loadAiClientIfMissing() {
+  if (typeof getAiChatFn() === "function") return true;
+  const chain = ["prompt-hints.js", "ai-providers.js", "ai-client.js"];
+  for (const file of chain) {
+    if (typeof getAiChatFn() === "function") return true;
+    try {
+      await loadExtensionScript(file);
+    } catch (err) {
+      console.warn(`loadAiClientIfMissing ${file}:`, err);
     }
-    if ((s.aiProvider || "hosted") === "hosted") {
-      return hostedChatDirect(sources, s, history);
-    }
-    const res = await runtimeSend({ type: "CHAT", sources, settings: s, history });
-    if (res?.error) throw new Error(res.error);
-    return res.text;
+  }
+  return typeof getAiChatFn() === "function";
+}
+
+async function forceReloadAiClient() {
+  ["ai-client.js", "ai-providers.js", "prompt-hints.js"].forEach((name) => {
+    document.querySelectorAll(`script[src*="${name}"]`).forEach((el) => el.remove());
+  });
+  return loadAiClientIfMissing();
+}
+
+function ensureAiClientLoaded() {
+  return typeof getAiChatFn() === "function";
+}
+
+async function ensureAiReady() {
+  if (typeof getAiChatFn() === "function") return true;
+  if (await loadAiClientIfMissing()) return true;
+  return forceReloadAiClient();
+}
+
+function normalizeCursorModelSetting(model) {
+  const m = String(model || "")
+    .trim()
+    .toLowerCase();
+  const aliases = {
+    composer: "composer-2.5",
+    "composer-2": "composer-2.5",
+    "composer-latest": "composer-2.5",
+    "composer-2-5": "composer-2.5",
+    "claude-4-sonnet-thinking": "claude-opus-4-8",
+    "gpt-4o": "composer-2.5",
+    "gemini-2.5-flash": "composer-2.5",
   };
-
-  try {
-    return await run(settings);
-  } catch (err) {
-    const key = settings.geminiApiKey?.trim() || $("geminiApiKey")?.value?.trim();
-    if ((settings.aiProvider || "hosted") === "hosted" && key) {
-      setStatus(t("aiFallbackOwnKey"), "success");
-      return run({ ...settings, aiProvider: "gemini", geminiApiKey: key });
-    }
-    throw err;
-  }
+  if (aliases[m]) return aliases[m];
+  return model?.trim() || "composer-2.5";
 }
 
-async function callDescribeImage(imageBase64, settings) {
-  const fn = getAiDescribeFn();
-  if (typeof fn === "function") {
-    return fn(imageBase64, settings);
-  }
-
-  if ((settings.aiProvider || "hosted") === "hosted") {
-    return hostedDescribeDirect(imageBase64, settings);
-  }
-
-  const res = await runtimeSend({ type: "DESCRIBE_IMAGE", imageBase64, settings });
+async function callChatViaBackground(sources, settings, history, provider) {
+  await runtimeSend({ type: "WAKE_WORKER" }).catch(() => {});
+  const res = await withChatTimeout(
+    runtimeSend({ type: "CHAT", sources, settings, history }),
+    provider
+  );
   if (res?.error) throw new Error(res.error);
+  if (!res?.text?.trim()) throw new Error("Порожня відповідь AI");
   return res.text;
 }
 
+async function callChatWithSources(sources, settings, history, signal) {
+  const provider = settings.aiProvider || "hosted";
+
+  const runInPage = async () => {
+    await ensureAiReady();
+    const fn = getAiChatFn();
+    if (typeof fn !== "function") {
+      throw new Error("__no_ai_client__");
+    }
+    return fn(sources, settings, history, signal);
+  };
+
+  const runInBackground = () => callChatViaBackground(sources, settings, history, provider);
+
+  // Cursor runs in-page (iframe stays alive). ai-client.js must load — see prompt-hints before it in app.html.
+  if (provider === "cursor") {
+    await ensureAiReady();
+    const fn = getAiChatFn();
+    if (typeof fn !== "function") {
+      throw new Error(
+        "AI модуль не завантажився. Reload розширення на chrome://extensions (↻) і ⌘+R на сторінці."
+      );
+    }
+    return fn(sources, settings, history, signal);
+  }
+
+  if (provider === "hosted") {
+    return hostedChatDirect(sources, settings, history, signal);
+  }
+
+  try {
+    return await runInPage();
+  } catch (inPageErr) {
+    if (inPageErr?.message === "__chat_aborted__") throw inPageErr;
+    console.warn("In-page AI failed, retrying via background:", inPageErr);
+    try {
+      return await runInBackground();
+    } catch (bgErr) {
+      const msg = bgErr?.message || inPageErr?.message || "AI помилка";
+      if (msg === "__no_ai_client__") {
+        throw new Error(
+          "AI модуль не завантажився. Натисніть ↻ на chrome://extensions і перезавантажте сторінку."
+        );
+      }
+      throw new Error(msg);
+    }
+  }
+}
+
+function withChatTimeout(promise, provider) {
+  const ms = provider === "cursor" ? 240000 : 120000;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(
+        () => reject(new Error("AI не відповів вчасно. Перевірте API ключ і модель.")),
+        ms
+      )
+    ),
+  ]);
+}
+
+async function callDescribeViaBackground(imageBase64, settings) {
+  await runtimeSend({ type: "WAKE_WORKER" }).catch(() => {});
+  const res = await runtimeSend({ type: "DESCRIBE_IMAGE", imageBase64, settings });
+  if (res?.error) throw new Error(res.error);
+  if (!res?.text?.trim()) throw new Error("Порожня відповідь AI");
+  return res.text;
+}
+
+async function callDescribeImage(imageBase64, settings) {
+  const provider = settings.aiProvider || "hosted";
+
+  const runInPage = async () => {
+    await ensureAiReady();
+    const fn = getAiDescribeFn();
+    if (typeof fn !== "function") {
+      throw new Error("__no_ai_client__");
+    }
+    return fn(imageBase64, settings);
+  };
+
+  const runInBackground = () => callDescribeViaBackground(imageBase64, settings);
+
+  if (provider === "hosted") {
+    try {
+      return await runInPage();
+    } catch (inPageErr) {
+      try {
+        return await hostedDescribeDirect(imageBase64, settings);
+      } catch (hostedErr) {
+        console.warn("Hosted describe failed, retrying via background:", hostedErr);
+        return runInBackground();
+      }
+    }
+  }
+
+  try {
+    return await runInPage();
+  } catch (inPageErr) {
+    console.warn("In-page describe failed, retrying via background:", inPageErr);
+    return runInBackground();
+  }
+}
+
 const SETTINGS_SELECT_IDS = [
-  "aiProvider",
-  "geminiModel",
+  "aiConnectionMode",
+  "aiOwnProvider",
   "postLang",
   "whisperLang",
   "postStyle",
@@ -329,6 +645,7 @@ if (document.readyState === "loading") {
 
 window.onLocaleApplied = () => {
   updateAiMode();
+  populateOwnProviderSelect();
   updateAiProviderUI();
   renderSources();
   updateChatState();
@@ -340,13 +657,34 @@ window.onLocaleApplied = () => {
 async function bootApp() {
   try {
     await loadSettings();
+    try {
+      await loadAiClientIfMissing();
+    } catch (err) {
+      console.warn("loadAiClientIfMissing:", err);
+    }
+    await restoreChatHistory();
+    if (!chatHistory.length) renderChatEmpty();
     renderSources();
     updateCharCount();
     updateSettingsVersion();
-    $("settingsDetails")?.setAttribute("open", "");
+    if (!document.body.classList.contains("mode-toolbar-popup")) {
+      $("settingsDetails")?.setAttribute("open", "");
+    } else {
+      $("settingsDetails")?.removeAttribute("open");
+    }
     applyLocale(false);
     bindEvents();
-    void checkAiServer();
+    if (!ensureAiClientLoaded()) {
+      try {
+        await loadAiClientIfMissing();
+      } catch (err) {
+        console.warn("AI module retry:", err);
+      }
+    }
+    setStatus("", "");
+    window.AppChrome?.setHeaderStatus("", "");
+    void warmHostedServer({ showStatus: false });
+    startHostedKeepAlive();
   } catch (err) {
     console.error("Content Studio init failed:", err);
     window.AppChrome?.setHeaderStatus(`Init: ${err.message}`, "error");
@@ -379,10 +717,11 @@ async function setUiLang(lang, persist = true) {
     I18n.setLocale(uiLang);
     document.documentElement.lang = uiLang === "uk" ? "uk" : "en";
     I18n.applyPageI18n();
-    document.title = `${I18n.t("brandTitle")} for X`;
+    document.title = `${I18n.t("brandTitle")}`;
   }
 
   updateAiMode();
+  populateOwnProviderSelect();
   renderSources();
   updateChatState();
   if (!$("chatMessages")?.querySelector(".msg")) {
@@ -418,14 +757,36 @@ async function loadSettings() {
   let settings = {};
   try {
     const stored = await chrome.storage.local.get("settings");
-    settings = stored.settings || {};
+    settings = migrateAiSettings(stored.settings || {});
   } catch (_) {
-    settings = {};
+    settings = migrateAiSettings({});
   }
 
   uiLang = settings.uiLang ?? (typeof I18n !== "undefined" ? I18n.detectLocale() : "en");
   window.__uiLang = uiLang;
   setUiLangToggle(uiLang);
+
+  ownApiKeysCache = { ...(settings.ownApiKeys || {}) };
+  ownModelsCache = { ...(settings.ownModels || {}) };
+  if (settings.geminiApiKey && !ownApiKeysCache.gemini) ownApiKeysCache.gemini = settings.geminiApiKey;
+  if (settings.geminiModel && !ownModelsCache.gemini) ownModelsCache.gemini = settings.geminiModel;
+  if (settings.openrouterApiKey && !ownApiKeysCache.openrouter) {
+    ownApiKeysCache.openrouter = settings.openrouterApiKey;
+  }
+  if (settings.openrouterModel && !ownModelsCache.openrouter) {
+    ownModelsCache.openrouter = settings.openrouterModel;
+  }
+  if (settings.openaiApiKey && !ownApiKeysCache.openai) ownApiKeysCache.openai = settings.openaiApiKey;
+  if (settings.anthropicApiKey && !ownApiKeysCache.anthropic) {
+    ownApiKeysCache.anthropic = settings.anthropicApiKey;
+  }
+  if (settings.cursorApiKey && !ownApiKeysCache.cursor) ownApiKeysCache.cursor = settings.cursorApiKey;
+  if (settings.groqApiKey && !ownApiKeysCache.groq) ownApiKeysCache.groq = settings.groqApiKey;
+  if (settings.mistralApiKey && !ownApiKeysCache.mistral) ownApiKeysCache.mistral = settings.mistralApiKey;
+  if (settings.deepseekApiKey && !ownApiKeysCache.deepseek) {
+    ownApiKeysCache.deepseek = settings.deepseekApiKey;
+  }
+  if (ownModelsCache.cursor === "composer-2") ownModelsCache.cursor = "composer-2.5";
 
   setSelectValue("whisperLang", settings.whisperLang ?? DEFAULT_SETTINGS.whisperLang);
   setSelectValue(
@@ -437,60 +798,237 @@ async function loadSettings() {
   setSelectValue("emojiMode", settings.emojiMode ?? DEFAULT_SETTINGS.emojiMode);
   setSelectValue("perspective", settings.perspective ?? DEFAULT_SETTINGS.perspective);
   setSelectValue("temperature", String(settings.temperature ?? DEFAULT_SETTINGS.temperature));
-  setSelectValue("aiProvider", settings.aiProvider ?? DEFAULT_SETTINGS.aiProvider);
-  setSelectValue("geminiModel", settings.geminiModel ?? DEFAULT_SETTINGS.geminiModel);
+  setSelectValue("aiConnectionMode", settings.aiConnectionMode ?? DEFAULT_SETTINGS.aiConnectionMode);
 
-  const geminiKey = $("geminiApiKey");
-  if (geminiKey) geminiKey.value = settings.geminiApiKey ?? "";
-
-  const openrouterKey = $("openrouterApiKey");
-  if (openrouterKey) openrouterKey.value = settings.openrouterApiKey ?? "";
-
-  const openrouterModel = $("openrouterModel");
-  if (openrouterModel) {
-    openrouterModel.value = settings.openrouterModel ?? DEFAULT_SETTINGS.openrouterModel;
-  }
+  populateOwnProviderSelect();
+  setSelectValue("aiOwnProvider", settings.aiOwnProvider ?? DEFAULT_SETTINGS.aiOwnProvider);
+  syncOwnProviderFieldsFromCache();
 
   const custom = $("customInstructions");
   if (custom) custom.value = settings.customInstructions ?? DEFAULT_SETTINGS.customInstructions;
 
-  const widthPct = settings.panelWidthPercent ?? DEFAULT_SETTINGS.panelWidthPercent;
+  const rawPct = settings.panelWidthPercent ?? DEFAULT_SETTINGS.panelWidthPercent;
+  const widthPct =
+    typeof globalThis.clampPanelPercent === "function"
+      ? globalThis.clampPanelPercent(rawPct)
+      : Math.min(75, Math.max(25, Number(rawPct) || 25));
   if ($("panelWidthSlider")) $("panelWidthSlider").value = String(widthPct);
   if ($("panelWidthValue")) $("panelWidthValue").textContent = `${widthPct}%`;
 
   updateAiProviderUI();
 }
 
-function getAiProvider() {
-  return $("aiProvider")?.value || DEFAULT_SETTINGS.aiProvider;
+function migrateAiSettings(settings) {
+  const s = { ...settings };
+  const keys = { ...(s.ownApiKeys || {}) };
+  if (s.geminiApiKey) keys.gemini = s.geminiApiKey;
+  if (s.openrouterApiKey) keys.openrouter = s.openrouterApiKey;
+  if (s.openaiApiKey) keys.openai = s.openaiApiKey;
+  if (s.anthropicApiKey) keys.anthropic = s.anthropicApiKey;
+  if (s.cursorApiKey) keys.cursor = s.cursorApiKey;
+  if (s.groqApiKey) keys.groq = s.groqApiKey;
+  if (s.mistralApiKey) keys.mistral = s.mistralApiKey;
+  if (s.deepseekApiKey) keys.deepseek = s.deepseekApiKey;
+  s.ownApiKeys = keys;
+
+  const hasAnyOwnKey = Object.values(keys).some((k) => String(k || "").trim());
+  if (s.aiConnectionMode) {
+    if (hasAnyOwnKey && s.aiConnectionMode === "shared") {
+      s.aiConnectionMode = "own";
+    }
+    return s;
+  }
+
+  if (
+    hasAnyOwnKey ||
+    s.aiProvider === "gemini" ||
+    s.aiProvider === "openrouter" ||
+    s.aiProvider === "openai" ||
+    s.aiProvider === "anthropic" ||
+    s.aiProvider === "cursor" ||
+    s.aiProvider === "groq" ||
+    s.aiProvider === "mistral" ||
+    s.aiProvider === "deepseek"
+  ) {
+    s.aiConnectionMode = "own";
+    s.aiOwnProvider =
+      s.aiOwnProvider ||
+      (s.aiProvider && s.aiProvider !== "hosted" ? s.aiProvider : "gemini");
+    s.ownModels = { ...(s.ownModels || {}) };
+    if (s.geminiModel) s.ownModels.gemini = s.geminiModel;
+    if (s.openrouterModel) s.ownModels.openrouter = s.openrouterModel;
+  } else {
+    s.aiConnectionMode = "own";
+  }
+  return s;
 }
 
-function isAiConfigured() {
-  const provider = getAiProvider();
-  if (provider === "gemini") {
-    return Boolean($("geminiApiKey")?.value?.trim());
+function getAiConnectionMode() {
+  return $("aiConnectionMode")?.value || DEFAULT_SETTINGS.aiConnectionMode;
+}
+
+function getAiOwnProvider() {
+  return $("aiOwnProvider")?.value || DEFAULT_SETTINGS.aiOwnProvider;
+}
+
+function resolveAiProvider() {
+  return getAiConnectionMode() === "shared" ? "hosted" : getAiOwnProvider();
+}
+
+function getAiProvider() {
+  return resolveAiProvider();
+}
+
+function populateOwnProviderSelect() {
+  const sel = $("aiOwnProvider");
+  if (!sel) return;
+  const lang = uiLang === "uk" ? "Uk" : "En";
+  const prev = sel.value;
+  const order = [
+    "gemini",
+    "openai",
+    "anthropic",
+    "groq",
+    "mistral",
+    "deepseek",
+    "openrouter",
+    "cursor",
+  ];
+  sel.innerHTML = "";
+  for (const id of order) {
+    const p = globalThis.OWN_AI_PROVIDERS?.[id];
+    if (!p) continue;
+    const opt = document.createElement("option");
+    opt.value = p.id;
+    opt.textContent = p[`label${lang}`];
+    sel.appendChild(opt);
   }
-  if (provider === "openrouter") {
-    return Boolean($("openrouterApiKey")?.value?.trim());
+  if (prev && [...sel.options].some((o) => o.value === prev)) {
+    sel.value = prev;
   }
+}
+
+function saveCurrentOwnToCache() {
+  const p = getAiOwnProvider();
+  if (!p) return;
+  ownApiKeysCache[p] = $("ownApiKey")?.value?.trim() || "";
+  ownModelsCache[p] = $("ownModel")?.value?.trim() || "";
+}
+
+function ensureOwnConnectionMode() {
+  const modeEl = $("aiConnectionMode");
+  if (!modeEl || modeEl.value === "own") return false;
+  modeEl.value = "own";
+  updateAiProviderUI();
   return true;
 }
 
+function syncOwnProviderFieldsFromCache() {
+  const p = getAiOwnProvider();
+  const meta = globalThis.OWN_AI_PROVIDERS?.[p];
+  const keyEl = $("ownApiKey");
+  const modelEl = $("ownModel");
+  if (keyEl) keyEl.value = ownApiKeysCache[p] || "";
+  if (modelEl) modelEl.value = ownModelsCache[p] || meta?.defaultModel || "";
+
+  const hint = $("ownApiKeyHint");
+  if (hint && meta) {
+    const hintText = uiLang === "uk" ? meta.keyHintUk : meta.keyHintEn;
+    if (meta.keyUrl) {
+      hint.innerHTML = "";
+      const link = document.createElement("a");
+      link.href = meta.keyUrl;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = hintText;
+      hint.appendChild(link);
+    } else {
+      hint.textContent = hintText;
+    }
+  }
+  const list = $("ownModelsList");
+  if (list) {
+    list.innerHTML = "";
+    for (const m of meta?.models || []) {
+      const opt = document.createElement("option");
+      opt.value = m;
+      list.appendChild(opt);
+    }
+  }
+}
+
+function isAiConfigured() {
+  if (getAiConnectionMode() === "shared") return true;
+  const p = getAiOwnProvider();
+  return Boolean($("ownApiKey")?.value?.trim() || ownApiKeysCache[p]?.trim());
+}
+
 function updateAiProviderUI() {
-  const provider = getAiProvider();
-  $("aiProviderHostedHint")?.classList.toggle("hidden", provider !== "hosted");
-  $("aiProviderGeminiFields")?.classList.toggle("hidden", provider !== "gemini");
-  $("aiProviderOpenrouterFields")?.classList.toggle("hidden", provider !== "openrouter");
+  const shared = getAiConnectionMode() === "shared";
+  $("aiSharedHint")?.classList.toggle("hidden", !shared);
+  $("aiOwnBlock")?.classList.toggle("hidden", shared);
+  $("aiModeHint")?.classList.toggle("hidden", shared);
 
   const hint = $("aiModeHint");
-  if (!hint) return;
-  const hintKey =
-    provider === "gemini"
-      ? "aiOnHintOwnKey"
-      : provider === "openrouter"
-        ? "aiOnHintOpenRouter"
-        : "aiOnHintHosted";
-  hint.textContent = t(hintKey);
+  if (hint && !shared) {
+    if (!isAiConfigured()) {
+      hint.textContent = t("aiOwnFlowHint");
+    } else if (getAiOwnProvider() === "cursor") {
+      hint.textContent = t("cursorSlowHint");
+    } else {
+      const p = getAiOwnProvider();
+      const meta = globalThis.OWN_AI_PROVIDERS?.[p];
+      const name = meta?.[uiLang === "uk" ? "labelUk" : "labelEn"] || p;
+      hint.textContent = t("aiOnHintOwnProvider").replace("{provider}", name);
+    }
+  }
+
+  if (!shared) syncOwnProviderFieldsFromCache();
+}
+
+globalThis.updateAiProviderUI = updateAiProviderUI;
+globalThis.populateOwnProviderSelect = populateOwnProviderSelect;
+
+async function testOwnApi() {
+  saveCurrentOwnToCache();
+  if (!isAiConfigured()) {
+    setStatus(t("ownApiKeyRequired"), "error");
+    return;
+  }
+  if (getAiConnectionMode() === "shared") {
+    setStatus(t("testApiOwnOnly"), "error");
+    return;
+  }
+  setBusy(true);
+  setStatus(t("aiThinking"));
+  const provider = getAiOwnProvider();
+  const testAbort = new AbortController();
+  const testMs = provider === "cursor" ? 200000 : 90000;
+  const testTimer = setTimeout(() => testAbort.abort(), testMs);
+  try {
+    const settings = await getSettings();
+    settings.chatMode = "qa";
+    const reply = await callChatWithSources(
+      [],
+      settings,
+      [{ role: "user", content: "Reply with exactly: OK" }],
+      testAbort.signal
+    );
+    setStatus(t("testApiOk").replace("{reply}", String(reply).slice(0, 80)), "success");
+  } catch (err) {
+    setStatus(err?.message || "API test failed", "error");
+  } finally {
+    clearTimeout(testTimer);
+    setBusy(false);
+  }
+}
+
+function openOwnKeySettings() {
+  $("settingsDetails")?.setAttribute("open", "");
+  setSelectValue("aiConnectionMode", "own");
+  updateAiProviderUI();
+  $("ownApiKey")?.focus();
+  $("ownApiKey")?.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
 function applyLocale(showSavedStatus = false) {
@@ -501,8 +1039,9 @@ function applyLocale(showSavedStatus = false) {
   I18n.setLocale(uiLang);
   document.documentElement.lang = uiLang === "uk" ? "uk" : "en";
   I18n.applyPageI18n();
-  document.title = `${I18n.t("brandTitle")} for X`;
+  document.title = `${I18n.t("brandTitle")}`;
   updateAiMode();
+  populateOwnProviderSelect();
   renderSources();
   updateChatState();
   if (!$("chatMessages")?.querySelector(".msg")) {
@@ -528,18 +1067,37 @@ async function saveSettings() {
 }
 
 async function getSettings() {
+  saveCurrentOwnToCache();
+  const provider = resolveAiProvider();
+  if (provider === "cursor") {
+    const fixed = normalizeCursorModelSetting(ownModelsCache.cursor || $("ownModel")?.value);
+    ownModelsCache.cursor = fixed;
+    if ($("ownModel") && $("ownModel").value !== fixed) $("ownModel").value = fixed;
+  }
   return {
     ...DEFAULT_SETTINGS,
     uiLang: window.AppChrome?.getUiLang() || getUiLang(),
-    aiProvider: getAiProvider(),
+    aiConnectionMode: getAiConnectionMode(),
+    aiOwnProvider: getAiOwnProvider(),
+    aiProvider: resolveAiProvider(),
+    ownApiKeys: { ...ownApiKeysCache },
+    ownModels: { ...ownModelsCache },
+    ownApiKey: $("ownApiKey")?.value?.trim() ?? "",
+    ownModel: $("ownModel")?.value?.trim() ?? "",
     hostedApiUrl:
       typeof EXTENSION_CONFIG !== "undefined"
         ? EXTENSION_CONFIG.hostedApiUrl
         : DEFAULT_SETTINGS.hostedApiUrl,
-    geminiApiKey: $("geminiApiKey")?.value?.trim() ?? "",
-    geminiModel: $("geminiModel")?.value ?? DEFAULT_SETTINGS.geminiModel,
-    openrouterApiKey: $("openrouterApiKey")?.value?.trim() ?? "",
-    openrouterModel: $("openrouterModel")?.value?.trim() || DEFAULT_SETTINGS.openrouterModel,
+    geminiApiKey: ownApiKeysCache.gemini ?? "",
+    geminiModel: ownModelsCache.gemini ?? DEFAULT_SETTINGS.geminiModel,
+    openrouterApiKey: ownApiKeysCache.openrouter ?? "",
+    openrouterModel: ownModelsCache.openrouter ?? DEFAULT_SETTINGS.openrouterModel,
+    openaiApiKey: ownApiKeysCache.openai ?? "",
+    anthropicApiKey: ownApiKeysCache.anthropic ?? "",
+    cursorApiKey: ownApiKeysCache.cursor ?? "",
+    groqApiKey: ownApiKeysCache.groq ?? "",
+    mistralApiKey: ownApiKeysCache.mistral ?? "",
+    deepseekApiKey: ownApiKeysCache.deepseek ?? "",
     whisperLang: $("whisperLang")?.value ?? DEFAULT_SETTINGS.whisperLang,
     postLang: $("postLang")?.value ?? DEFAULT_SETTINGS.postLang,
     postStyle: $("postStyle")?.value ?? DEFAULT_SETTINGS.postStyle,
@@ -573,17 +1131,63 @@ function bindEvents() {
   });
 
   $("customInstructions")?.addEventListener("blur", () => saveSettingsQuiet());
-  $("geminiApiKey")?.addEventListener("blur", () => {
-    void saveSettingsQuiet().then(() => updateChatState());
-  });
-  $("openrouterApiKey")?.addEventListener("blur", () => {
-    void saveSettingsQuiet().then(() => updateChatState());
-  });
-  $("openrouterModel")?.addEventListener("blur", () => saveSettingsQuiet());
-  $("aiProvider")?.addEventListener("change", () => {
+
+  $("aiConnectionMode")?.addEventListener("change", () => {
     updateAiProviderUI();
-    void saveSettingsQuiet().then(() => checkAiServer());
+    resetChatForProviderSwitch(getActiveAiLabel());
+    void saveSettingsQuiet().then(() => {
+      updateChatState();
+      if (getAiConnectionMode() === "shared") {
+        hostedWarmAt = 0;
+        void warmHostedServer({ showStatus: true });
+        startHostedKeepAlive();
+      } else {
+        stopHostedKeepAlive();
+      }
+    });
   });
+
+  $("aiOwnProvider")?.addEventListener("mousedown", () => {
+    ownProviderBeforeChange = getAiOwnProvider();
+  });
+  $("aiOwnProvider")?.addEventListener("change", () => {
+    const prev = ownProviderBeforeChange || getAiOwnProvider();
+    ownApiKeysCache[prev] = $("ownApiKey")?.value?.trim() || "";
+    ownModelsCache[prev] = $("ownModel")?.value?.trim() || "";
+    ownProviderBeforeChange = getAiOwnProvider();
+    syncOwnProviderFieldsFromCache();
+    updateAiProviderUI();
+    if (getAiConnectionMode() === "own") {
+      resetChatForProviderSwitch(getActiveAiLabel());
+    }
+    void saveSettingsQuiet().then(() => updateChatState());
+  });
+
+  $("ownApiKey")?.addEventListener("input", () => {
+    if ($("ownApiKey")?.value?.trim()) ensureOwnConnectionMode();
+    saveCurrentOwnToCache();
+    void saveSettingsQuiet().then(() => updateChatState());
+  });
+  $("ownApiKey")?.addEventListener("blur", () => {
+    const key = $("ownApiKey")?.value?.trim() || "";
+    if (key) ensureOwnConnectionMode();
+    saveCurrentOwnToCache();
+    void saveSettingsQuiet().then(() => {
+      updateChatState();
+      if (key.length >= 8) {
+        const p = getAiOwnProvider();
+        const meta = globalThis.OWN_AI_PROVIDERS?.[p];
+        const name = meta?.[uiLang === "uk" ? "labelUk" : "labelEn"] || p;
+        setStatus(t("aiKeyReady").replace("{provider}", name), "success");
+      }
+    });
+  });
+  $("ownModel")?.addEventListener("blur", () => {
+    saveCurrentOwnToCache();
+    void saveSettingsQuiet();
+  });
+
+  $("testApiBtn")?.addEventListener("click", () => void testOwnApi());
 
   $("mediaInput")?.addEventListener("change", (e) => {
     const file = e.target.files[0];
@@ -621,6 +1225,10 @@ function bindEvents() {
 
   $("copyBtn")?.addEventListener("click", copyDraft);
   $("insertBtn")?.addEventListener("click", insertToX);
+  $("reloadAssistantBtn")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    reloadAssistant();
+  });
   $("chatForm")?.addEventListener("submit", (e) => {
     e.preventDefault();
     sendChatMessage($("chatInput").value.trim());
@@ -872,13 +1480,31 @@ function escapeHtml(str) {
 }
 
 function setStatus(text, type = "") {
+  const ownMode = getAiConnectionMode() === "own";
+  if (type === "error" && (!text || text === "__silent_ai__")) {
+    text = ownMode
+      ? "AI не відповів. Перевірте API ключ і модель у Налаштуваннях."
+      : t("aiSharedUnavailable");
+  }
+  if (type === "error" && !ownMode && shouldSuppressStatusError(text)) {
+    text = t("aiSharedUnavailable");
+  }
   const el = $("status");
   if (el) {
     el.textContent = text;
     el.className = `status ${type}`.trim();
-    el.classList.remove("hidden");
+    el.classList.toggle("hidden", !text);
   }
-  window.AppChrome?.setHeaderStatus(text, type);
+  if (type === "error" && !ownMode) {
+    window.AppChrome?.setHeaderStatus("", "");
+  } else {
+    window.AppChrome?.setHeaderStatus(text, type);
+  }
+}
+
+function flashSharedUnavailable() {
+  setStatus(t("aiSharedUnavailable"), "error");
+  setTimeout(() => setStatus("", ""), 3500);
 }
 
 function setProgress(value, visible = true) {
@@ -898,15 +1524,24 @@ function updateChatState() {
   $("chatSendBtn").disabled = !canChat;
   $("chatInput").disabled = !canChat;
   if (!configured) {
-    const provider = getAiProvider();
-    $("chatInput").placeholder =
-      provider === "openrouter" ? t("openrouterKeyRequired") : t("geminiKeyRequired");
+    if (getAiConnectionMode() === "own") {
+      const p = getAiOwnProvider();
+      const meta = globalThis.OWN_AI_PROVIDERS?.[p];
+      const name = meta?.[uiLang === "uk" ? "labelUk" : "labelEn"] || p;
+      $("chatInput").placeholder = t("ownApiKeyForProvider").replace("{provider}", name);
+    } else {
+      $("chatInput").placeholder = t("ownApiKeyRequired");
+    }
   } else {
     $("chatInput").placeholder = t("chatPlaceholder");
   }
   document.querySelectorAll(".chip").forEach((c) => {
     c.disabled = !canChat;
   });
+  const reloadLabel = $("reloadAssistantBtn")?.querySelector(".btn-reload-label");
+  if (reloadLabel) {
+    reloadLabel.textContent = isBusy ? t("stopAssistant") : t("reloadAssistantShort");
+  }
 }
 
 function updateCharCount() {
@@ -935,8 +1570,78 @@ function appendMessage(role, text) {
   $("chatMessages").scrollTop = $("chatMessages").scrollHeight;
 }
 
+async function persistChatHistory() {
+  try {
+    await chrome.storage.session.set({ [CHAT_HISTORY_KEY]: chatHistory });
+  } catch (_) {}
+}
+
+async function restoreChatHistory() {
+  try {
+    const stored = await chrome.storage.session.get(CHAT_HISTORY_KEY);
+    const saved = stored?.[CHAT_HISTORY_KEY];
+    if (!Array.isArray(saved) || !saved.length) return;
+    chatHistory = saved.filter((m) => m?.role && m?.content);
+    const box = $("chatMessages");
+    if (!box) return;
+    box.innerHTML = "";
+    for (const msg of chatHistory) {
+      appendMessage(msg.role === "assistant" ? "assistant" : "user", msg.content);
+    }
+  } catch (_) {}
+}
+
+function isChatAbortedError(err) {
+  return err?.message === "__chat_aborted__";
+}
+
+function reloadAssistant() {
+  const wasBusy = isBusy;
+  chatOpGen += 1;
+  clearChatStatusTicker();
+  if (activeChatAbort) {
+    activeChatAbort.abort();
+    activeChatAbort = null;
+  }
+  globalThis.resetCursorChatSession?.();
+  setBusy(false);
+  setStatus(wasBusy ? t("chatStopped") : t("assistantReloaded"), "success");
+  window.AppChrome?.setHeaderStatus?.("", "");
+  void runtimeSend({ type: "WAKE_WORKER" }).catch(() => {});
+}
+
+function getActiveAiLabel() {
+  if (getAiConnectionMode() === "shared") {
+    return uiLang === "uk" ? "Google Gemini (спільний)" : "Google Gemini (shared)";
+  }
+  const p = getAiOwnProvider();
+  const meta = globalThis.OWN_AI_PROVIDERS?.[p];
+  return meta?.[uiLang === "uk" ? "labelUk" : "labelEn"] || p;
+}
+
+function resetChatForProviderSwitch(providerLabel) {
+  chatOpGen += 1;
+  if (activeChatAbort) {
+    activeChatAbort.abort();
+    activeChatAbort = null;
+  }
+  clearChatStatusTicker();
+  chatHistory = [];
+  globalThis.resetCursorChatSession?.();
+  const box = $("chatMessages");
+  if (box) box.innerHTML = "";
+  renderChatEmpty();
+  const label = providerLabel || getActiveAiLabel();
+  setStatus(t("aiSwitchedNotice").replace("{provider}", label), "success");
+  setTimeout(() => setStatus("", ""), 2500);
+  void persistChatHistory();
+  setBusy(false);
+  updateChatState();
+}
+
 function resetChatForPost() {
   chatHistory = [];
+  globalThis.resetCursorChatSession?.();
   const box = $("chatMessages");
   if (box) box.innerHTML = "";
 }
@@ -1093,7 +1798,7 @@ function isExpandPostRequest(text) {
   return /більш|довш|longer|розшир|expand/i.test(String(text || "")) && /пост/i.test(String(text || ""));
 }
 
-async function expandExistingPost(settings, userPrompt) {
+async function expandExistingPost(settings, userPrompt, signal) {
   const draft = $("postText")?.value?.trim();
   const mediaSources = prepareSourcesForChat(getReadySources(), "qa");
   const sources = draft
@@ -1117,7 +1822,7 @@ ${settings.postLang === "uk" ? "Ukrainian." : settings.postLang === "en" ? "Engl
 Post text only.`;
 
   return extractPostText(
-    await callChatWithSources(sources, postSettings, [{ role: "user", content: prompt }])
+    await callChatWithSources(sources, postSettings, [{ role: "user", content: prompt }], signal)
   );
 }
 
@@ -1150,7 +1855,7 @@ ${settings.postLang === "uk" ? "Ukrainian." : settings.postLang === "en" ? "Engl
 Post text only — no title, no "here is your post".`;
 }
 
-async function generatePostFromVideo(settings, userPrompt) {
+async function generatePostFromVideo(settings, userPrompt, signal) {
   const readySources = prepareSourcesForChat(getReadySources(), "qa");
   const minLen = settings.minPostChars || 0;
   const postSettings = {
@@ -1163,24 +1868,24 @@ async function generatePostFromVideo(settings, userPrompt) {
 
   setStatus(t("aiThinking"));
   let reply = extractPostText(
-    await callChatWithSources(readySources, postSettings, [{ role: "user", content: prompt }])
+    await callChatWithSources(readySources, postSettings, [{ role: "user", content: prompt }], signal)
   );
 
   if (minLen && reply.length < minLen * 0.85) {
     $("postText").value = reply;
-    reply = await expandExistingPost({ ...settings, minPostChars: minLen }, userPrompt);
+    reply = await expandExistingPost({ ...settings, minPostChars: minLen }, userPrompt, signal);
   } else if (isBadPostOutput(reply)) {
     reply = extractPostText(
       await callChatWithSources(readySources, { ...postSettings, temperature: 0.5 }, [
         { role: "user", content: prompt + "\nUse specific tool names and steps from the transcript." },
-      ])
+      ], signal)
     );
   }
 
   return reply;
 }
 
-async function retryPostFromFullTranscript(settings, userPrompt) {
+async function retryPostFromFullTranscript(settings, userPrompt, signal) {
   const fullSources = prepareSourcesForChat(getReadySources(), "qa");
   const retrySettings = {
     ...settings,
@@ -1198,24 +1903,38 @@ async function retryPostFromFullTranscript(settings, userPrompt) {
 
   const text = await callChatWithSources(fullSources, retrySettings, [
     { role: "user", content: retryPrompt },
-  ]);
+  ], signal);
   return extractPostText(text);
 }
 
 async function sendChatMessage(text, options = {}) {
   if (!text || isBusy) return;
-  if (!isAiConfigured()) return;
+  if (!isAiConfigured()) {
+    setStatus(t("ownApiKeyRequired"), "error");
+    openOwnKeySettings();
+    return;
+  }
+
+  saveCurrentOwnToCache();
+  void saveSettingsQuiet();
 
   if (options.fresh) {
     chatHistory = [];
+    globalThis.resetCursorChatSession?.();
+    void persistChatHistory();
   }
 
   $("chatInput").value = "";
   appendMessage("user", options.displayText || text);
   chatHistory.push({ role: "user", content: text });
+  void persistChatHistory();
+
+  const opId = ++chatOpGen;
+  const abort = new AbortController();
+  activeChatAbort = abort;
+  let signal = abort.signal;
 
   setBusy(true);
-  setStatus(t("aiThinking"));
 
   try {
     const chatMode = detectChatMode(text, options);
@@ -1223,56 +1942,179 @@ async function sendChatMessage(text, options = {}) {
     settings.chatMode = chatMode;
     applyPostConstraintsFromUserMessage(settings, text);
 
+    const cursorModel =
+      settings.ownModels?.cursor || settings.ownModel || normalizeCursorModelSetting("");
+    if (settings.aiProvider === "hosted" && Date.now() - hostedWarmAt >= HOSTED_WARM_TTL_MS) {
+      setStatus(t("serverWaking"), "");
+      await warmHostedServer({ showStatus: false });
+    }
+
+    startChatStatusTicker(settings.aiProvider, cursorModel);
+
+    if (settings.aiProvider === "cursor") {
+      const cursorTimeoutMs = chatMode === "qa" ? 120000 : 150000;
+      signal = mergeAbortSignals(abort.signal, cursorTimeoutMs);
+      settings._onCursorProgress = (preview) => {
+        const short = String(preview || "").replace(/\s+/g, " ").trim();
+        if (short) {
+          clearChatStatusTicker();
+          setStatus(short.length > 72 ? `${short.slice(0, 72)}…` : short, "");
+        } else {
+          setStatus(t("cursorThinking"), "");
+        }
+      };
+    } else if (settings.aiProvider === "hosted") {
+      signal = mergeAbortSignals(abort.signal, 90000);
+    }
+
     const readySources = prepareSourcesForChat(getReadySources(), chatMode);
 
     let replyText;
 
     if (chatMode === "post") {
       if (shouldExpandDraft(text, settings)) {
-        replyText = await expandExistingPost(settings, text);
+        replyText = await expandExistingPost(settings, text, signal);
       } else if (hasMediaSources()) {
-        replyText = await generatePostFromVideo(settings, text);
+        replyText = await generatePostFromVideo(settings, text, signal);
       } else {
         const apiHistory = historyForApi(chatHistory);
-        replyText = await callChatWithSources(readySources, settings, apiHistory);
+        replyText = await callChatWithSources(readySources, settings, apiHistory, signal);
         if (isBadPostOutput(replyText) && hasReadySources() && !options._noRetry) {
-          replyText = await retryPostFromFullTranscript(settings, text);
+          replyText = await retryPostFromFullTranscript(settings, text, signal);
         }
         replyText = extractPostText(replyText);
       }
       $("postText").value = replyText;
       updateCharCount();
     } else {
-      replyText = await callChatWithSources(readySources, settings, chatHistory);
+      replyText = await callChatWithSources(readySources, settings, chatHistory, signal);
     }
 
+    if (opId !== chatOpGen) return;
     if (!replyText) throw new Error(t("transcribeFailed"));
 
     chatHistory.push({ role: "assistant", content: replyText });
     appendMessage("assistant", replyText);
+    void persistChatHistory();
     setStatus(t("ready"), "success");
   } catch (err) {
-    setStatus(err.message, "error");
-    chatHistory.pop();
+    if (opId !== chatOpGen) return;
+    if (isChatAbortedError(err) && abort.signal.aborted) {
+      setStatus(t("chatStopped"), "");
+      chatHistory.pop();
+      void persistChatHistory();
+      return;
+    }
+    let msg = err?.message || "";
+    if (msg === "__silent_ai__" || (getAiConnectionMode() === "shared" && isSharedQuotaError(err))) {
+      flashSharedUnavailable();
+    } else if (msg) {
+      setStatus(msg, "error");
+    } else if (getAiConnectionMode() === "own") {
+      setStatus(
+        "AI не відповів. Перевірте API ключ, модель composer-2.5 і Reload розширення.",
+        "error"
+      );
+    } else {
+      flashSharedUnavailable();
+    }
+    void persistChatHistory();
   } finally {
-    setBusy(false);
+    clearChatStatusTicker();
+    if (activeChatAbort === abort) activeChatAbort = null;
+    if (opId === chatOpGen) setBusy(false);
+  }
+}
+
+async function copyTextToClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.left = "-9999px";
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try {
+      ok = document.execCommand("copy");
+    } finally {
+      ta.remove();
+    }
+    return ok;
+  }
+}
+
+function getTextForCopyInsert() {
+  const draft = $("postText")?.value?.trim();
+  if (draft) return draft;
+
+  for (let i = chatHistory.length - 1; i >= 0; i--) {
+    if (chatHistory[i]?.role === "assistant" && chatHistory[i]?.content?.trim()) {
+      return chatHistory[i].content.trim();
+    }
+  }
+
+  for (let i = chatHistory.length - 1; i >= 0; i--) {
+    if (chatHistory[i]?.role === "user" && chatHistory[i]?.content?.trim()) {
+      return chatHistory[i].content.trim();
+    }
+  }
+
+  const chatInput = $("chatInput")?.value?.trim();
+  if (chatInput) return chatInput;
+
+  const msgs = $("chatMessages");
+  if (msgs) {
+    const nodes = msgs.querySelectorAll(".msg.assistant, .msg.user");
+    for (let i = nodes.length - 1; i >= 0; i--) {
+      const text = nodes[i]?.textContent?.trim();
+      if (text) return text;
+    }
+  }
+
+  return "";
+}
+
+function flashActionStatus(text, type = "success") {
+  setStatus(text, type);
+  window.AppChrome?.setHeaderStatus?.(text, type);
+  if (type === "success") {
+    setTimeout(() => {
+      setStatus(t("ready"), "success");
+      window.AppChrome?.setHeaderStatus?.("", "");
+    }, 2200);
   }
 }
 
 async function copyDraft() {
-  const text = $("postText").value;
-  if (!text) return;
-  await navigator.clipboard.writeText(text);
-  setStatus(t("copied"), "success");
+  const text = getTextForCopyInsert();
+  if (!text) {
+    flashActionStatus(t("noTextToCopy"), "error");
+    return;
+  }
+  const ok = await copyTextToClipboard(text);
+  if (!ok) {
+    flashActionStatus(t("copyFailed"), "error");
+    return;
+  }
+  flashActionStatus(t("copied"), "success");
 }
 
 async function insertToX() {
-  const text = $("postText").value;
-  if (!text) return;
-  const result = await runtimeSend({ type: "INSERT_TWEET", text });
-  if (result?.error) {
-    setStatus(result.error, "error");
+  const text = getTextForCopyInsert();
+  if (!text) {
+    flashActionStatus(t("noTextToInsert"), "error");
     return;
   }
-  setStatus(t("insertedX"), "success");
+  flashActionStatus(t("insertingX"), "");
+  const result = await runtimeSend({ type: "INSERT_TWEET", text });
+  if (result?.error) {
+    flashActionStatus(result.error, "error");
+    return;
+  }
+  flashActionStatus(t("insertedX"), "success");
 }

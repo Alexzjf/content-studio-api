@@ -1,11 +1,11 @@
-const FALLBACK_MODELS = ["gemini-2.0-flash", "gemini-2.5-flash-lite"];
+const FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite"];
 
 function normalizeModel(model) {
-  const m = String(model || "gemini-2.0-flash")
+  const m = String(model || "gemini-2.5-flash")
     .trim()
     .replace(/^models\//, "");
-  if (/gemini-1\.5/i.test(m)) return "gemini-2.0-flash";
-  return m || "gemini-2.0-flash";
+  if (/gemini-1\.5/i.test(m)) return "gemini-2.5-flash";
+  return m || "gemini-2.5-flash";
 }
 
 function sleep(ms) {
@@ -42,10 +42,10 @@ function backoffMs(attempt) {
 
 function formatUserError(errMsg) {
   if (/not found|not supported|does not exist/i.test(errMsg)) {
-    return "Модель Gemini недоступна. Спробуйте ще раз або змініть GEMINI_MODEL.";
+    return "Модель асистента недоступна. Спробуйте ще раз.";
   }
   if (isTransient(429, errMsg)) {
-    return "Хмарний Gemini зайнятий. Спробуйте ще раз або вкажіть свій API ключ у Налаштуваннях.";
+    return "Асистент тимчасово зайнятий. Спробуйте ще раз.";
   }
   return errMsg;
 }
@@ -98,33 +98,34 @@ export async function geminiGenerate(
     },
   };
 
-  for (let attempt = 0; attempt < maxTries; attempt++) {
-    const m = models[attempt % models.length];
-    const { response, body, errMsg } = await callGemini(apiKey, m, payload);
+  for (const m of models) {
+    for (let attempt = 0; attempt < maxTries; attempt++) {
+      const { response, body, errMsg } = await callGemini(apiKey, m, payload);
 
-    if (response.ok) {
-      const data = JSON.parse(body);
-      const text = data?.candidates?.[0]?.content?.parts?.map((p) => p.text).join("").trim();
-      if (!text) throw new Error("Empty Gemini response");
-      return text;
-    }
-
-    lastError = errMsg;
-
-    if (isModelUnavailable(response.status, errMsg)) {
-      continue;
-    }
-
-    if (isTransient(response.status, errMsg)) {
-      lastTransient = { errMsg, retryAfterSec: retryAfterSec(errMsg) };
-      if (attempt < maxTries - 1) {
-        await sleep(backoffMs(attempt));
-        continue;
+      if (response.ok) {
+        const data = JSON.parse(body);
+        const text = data?.candidates?.[0]?.content?.parts?.map((p) => p.text).join("").trim();
+        if (!text) throw new Error("Empty Gemini response");
+        return text;
       }
-      break;
-    }
 
-    throw new Error(formatUserError(errMsg));
+      lastError = errMsg;
+
+      if (isModelUnavailable(response.status, errMsg)) {
+        break;
+      }
+
+      if (isTransient(response.status, errMsg)) {
+        lastTransient = { errMsg, retryAfterSec: retryAfterSec(errMsg) };
+        if (attempt < maxTries - 1) {
+          await sleep(backoffMs(attempt));
+          continue;
+        }
+        break;
+      }
+
+      throw new Error(formatUserError(errMsg));
+    }
   }
 
   if (lastTransient) {

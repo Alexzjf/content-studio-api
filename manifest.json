@@ -1,10 +1,16 @@
 {
   "manifest_version": 3,
   "name": "__MSG_extensionName__",
-  "version": "1.27.2",
+  "version": "1.34.0",
   "description": "__MSG_extensionDescription__",
   "default_locale": "en",
-  "permissions": ["storage", "activeTab", "offscreen", "scripting", "windows", "tabs", "sidePanel"],
+  "icons": {
+    "16": "assets/icons/icon-16.png",
+    "32": "assets/icons/icon-32.png",
+    "48": "assets/icons/icon-48.png",
+    "128": "assets/icons/icon-128.png"
+  },
+  "permissions": ["storage", "activeTab", "offscreen", "scripting", "windows", "tabs", "sidePanel", "system.display"],
   "host_permissions": [
     "https://content-studio-api-1.onrender.com/*",
     "https://content-studio-api.onrender.com/*",
@@ -18,11 +24,22 @@
     "https://huggingface.co/*",
     "https://cdn-lfs.huggingface.co/*",
     "https://generativelanguage.googleapis.com/*",
-    "https://openrouter.ai/*"
+    "https://openrouter.ai/*",
+    "https://api.openai.com/*",
+    "https://api.anthropic.com/*",
+    "https://api.groq.com/*",
+    "https://api.mistral.ai/*",
+    "https://api.deepseek.com/*",
+    "https://api.cursor.com/*"
   ],
   "action": {
-    "default_title": "Content Studio for X",
-    "default_popup": "app.html"
+    "default_title": "cheatXtwitter",
+    "default_popup": "app.html",
+    "default_icon": {
+      "16": "assets/icons/icon-16.png",
+      "32": "assets/icons/icon-32.png",
+      "48": "assets/icons/icon-48.png"
+    }
   },
   "side_panel": {
     "default_path": "app.html?side=1"
@@ -33,7 +50,16 @@
   "content_scripts": [
     {
       "matches": ["https://x.com/*", "https://twitter.com/*"],
-      "js": ["content.js"],
+      "js": ["content.js", "page-panel.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "exclude_matches": [
+        "https://chrome.google.com/*",
+        "https://chromewebstore.google.com/*"
+      ],
+      "js": ["page-panel.js"],
       "run_at": "document_idle"
     }
   ],

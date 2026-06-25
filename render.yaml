@@ -13,7 +13,7 @@ services:
       - key: GEMINI_API_KEY
         sync: false
       - key: GEMINI_MODEL
-        value: gemini-2.5-flash-lite
+        value: gemini-2.5-flash
       - key: DAILY_LIMIT_PER_CLIENT
         value: "300"
       - key: NODE_ENV

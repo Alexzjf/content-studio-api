@@ -133,6 +133,31 @@ function customRulesBlock(settings) {
   return custom ? `\nUSER'S EXTRA RULES (follow these closely):\n${custom}\n` : "";
 }
 
+function aiIdentityBlock(settings = {}) {
+  const p = settings.aiProvider || "hosted";
+  if (p === "hosted") {
+    return (
+      "AI IDENTITY: You are Google Gemini (shared cloud assistant for cheatXtwitter). " +
+      "If the user asks which AI or model you are, answer Google Gemini — NOT Cursor."
+    );
+  }
+  if (p === "cursor") {
+    return "AI IDENTITY: You are Cursor Cloud Agent. If asked, say Cursor — not Gemini.";
+  }
+  if (p === "gemini") {
+    return "AI IDENTITY: You are Google Gemini (user's own API key). If asked, say Gemini.";
+  }
+  if (p === "openai") {
+    return "AI IDENTITY: You are OpenAI ChatGPT. If asked, say OpenAI.";
+  }
+  if (p === "anthropic") {
+    return "AI IDENTITY: You are Anthropic Claude. If asked, say Claude.";
+  }
+  const labels = { groq: "Groq", mistral: "Mistral", deepseek: "DeepSeek", openrouter: "OpenRouter" };
+  const name = labels[p] || p;
+  return `AI IDENTITY: You are ${name}. If asked which AI you are, answer ${name}.`;
+}
+
 function hasSourceContent(sources) {
   return Array.isArray(sources) && sources.some((s) => s?.content?.trim());
 }
@@ -158,6 +183,8 @@ When the user asks for a thread: number tweets as 1/, 2/, 3/ … each under 280 
   }
 
   return `You are a helpful AI assistant in Content Studio for X (Twitter).
+
+${aiIdentityBlock(settings)}
 
 YOUR JOB:
 - Answer questions, brainstorm ideas, translate text, improve drafts, explain concepts.
