@@ -92,22 +92,54 @@ function authMiddleware(req, res, next) {
   next();
 }
 
-const API_VERSION = "1.29.0";
+const API_VERSION = "1.30.0";
+const INTERNAL_RETRY_MS = Number(process.env.INTERNAL_RETRY_MS || 80000);
+
+let keyCursor = 0;
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function isTransientServerError(err) {
+  if (err?.code === "RATE_LIMIT") return true;
+  const msg = String(err?.message || "");
+  return /тимчасово|зайнят|high demand|quota|rate limit|overloaded|try again|unavailable/i.test(msg);
+}
 
 async function generateWithKeyRotation(options) {
+  const keys = GEMINI_API_KEYS;
+  if (!keys.length) throw new Error("No Gemini keys configured");
+
+  const deadline = Date.now() + INTERNAL_RETRY_MS;
   let lastError = null;
-  for (let i = 0; i < GEMINI_API_KEYS.length; i++) {
-    try {
-      return await geminiGenerate(GEMINI_API_KEYS[i], options);
-    } catch (err) {
-      lastError = err;
-      if (err.code === "RATE_LIMIT" && i < GEMINI_API_KEYS.length - 1) {
-        continue;
+  let round = 0;
+
+  while (Date.now() < deadline) {
+    for (let k = 0; k < keys.length; k++) {
+      const keyIndex = (keyCursor + k) % keys.length;
+      try {
+        const text = await geminiGenerate(keys[keyIndex], options);
+        keyCursor = (keyIndex + 1) % keys.length;
+        return text;
+      } catch (err) {
+        lastError = err;
+        if (!isTransientServerError(err)) throw err;
+        const waitMs = Math.min(
+          7000,
+          (err.retryAfterSec || 2) * 1000 + round * 400 + k * 200
+        );
+        await sleep(waitMs);
       }
-      throw err;
     }
+    round += 1;
+    await sleep(1200 + round * 600);
   }
-  throw lastError || new Error("Gemini unavailable");
+
+  const err = lastError || new Error("Асистент тимчасово зайнятий. Спробуйте ще раз.");
+  err.code = "RATE_LIMIT";
+  err.retryAfterSec = 3;
+  throw err;
 }
 
 app.get("/health", (_req, res) => {

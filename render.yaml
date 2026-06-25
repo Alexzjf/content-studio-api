@@ -1,10 +1,11 @@
 # Deploy: push to GitHub → render.com → New Blueprint → select this repo
-# Or: New Web Service → Root Directory: server → npm start
+# PRODUCTION: use plan starter (not free) to avoid 30–45s cold starts.
+# Set GEMINI_API_KEYS with 2+ keys from different Google accounts + billing enabled.
 services:
   - type: web
     name: olexander-cs-api
     runtime: node
-    plan: free
+    plan: starter
     rootDir: server
     buildCommand: npm install
     startCommand: npm start
@@ -12,9 +13,13 @@ services:
     envVars:
       - key: GEMINI_API_KEY
         sync: false
+      - key: GEMINI_API_KEYS
+        sync: false
       - key: GEMINI_MODEL
         value: gemini-2.5-flash
       - key: DAILY_LIMIT_PER_CLIENT
         value: "300"
+      - key: INTERNAL_RETRY_MS
+        value: "80000"
       - key: NODE_ENV
         value: production

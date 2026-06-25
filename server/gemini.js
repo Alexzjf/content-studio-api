@@ -37,7 +37,7 @@ export function retryAfterSec(errMsg) {
 }
 
 function backoffMs(attempt) {
-  return 800 + attempt * 700;
+  return 600 + attempt * 500;
 }
 
 function formatUserError(errMsg) {
@@ -76,7 +76,7 @@ export async function geminiGenerate(
 ) {
   const preferred = normalizeModel(model);
   const models = [...new Set([preferred, ...FALLBACK_MODELS.map(normalizeModel)])];
-  const maxTries = 4;
+  const maxTries = 5;
   let lastError = "Gemini request failed";
   let lastTransient = null;
 
