@@ -312,7 +312,8 @@
 
     const apiBase = crmApiBase();
     const redirect = chrome.identity.getRedirectURL("telegram");
-    const popupUrl = `${apiBase}/auth/telegram/page?bot=${encodeURIComponent(bot)}&redirect_uri=${encodeURIComponent(redirect)}`;
+    const lang = "en";
+    const popupUrl = `${apiBase}/auth/telegram/page?bot=${encodeURIComponent(bot)}&redirect_uri=${encodeURIComponent(redirect)}&lang=${encodeURIComponent(lang)}`;
 
     const responseUrl = await new Promise((resolve, reject) => {
       chrome.identity.launchWebAuthFlow({ url: popupUrl, interactive: true }, (url) => {

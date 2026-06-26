@@ -197,8 +197,12 @@ function normalizeBotUsername(bot) {
     .replace(/[^a-zA-Z0-9_]/g, "");
 }
 
-function telegramWidgetPage(bot, redirectUri) {
+function telegramWidgetPage(bot, redirectUri, lang = "en") {
   const safeBot = normalizeBotUsername(bot);
+  const safeLang = String(lang || "en")
+    .toLowerCase()
+    .replace(/[^a-z]/g, "")
+    .slice(0, 2) || "en";
   if (!safeBot) {
     return "<!DOCTYPE html><body><p>Bot username missing</p></body></html>";
   }
@@ -206,7 +210,7 @@ function telegramWidgetPage(bot, redirectUri) {
 <html lang="en"><head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Telegram</title>
+<title>Sign in with Telegram</title>
 <style>
   body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0c0c0e;color:#fff;font-family:system-ui,sans-serif}
   .wrap{text-align:center;padding:24px}
@@ -226,6 +230,7 @@ function telegramWidgetPage(bot, redirectUri) {
   s.async = true;
   s.src = "https://telegram.org/js/telegram-widget.js?22";
   s.setAttribute("data-telegram-login", ${JSON.stringify(safeBot)});
+  s.setAttribute("data-lang", ${JSON.stringify(safeLang)});
   s.setAttribute("data-size", "large");
   s.setAttribute("data-radius", "8");
   s.setAttribute("data-onauth", "onTelegramAuth(user)");
@@ -239,10 +244,11 @@ export function mountAuthRoutes(app) {
   app.get("/auth/telegram/page", (req, res) => {
     const bot = normalizeBotUsername(req.query.bot);
     const redirectUri = req.query.redirect_uri;
+    const lang = req.query.lang || "en";
     if (!bot || !redirectUri) {
       return res.status(400).send("bot and redirect_uri required");
     }
-    res.type("html").send(telegramWidgetPage(bot, redirectUri));
+    res.type("html").send(telegramWidgetPage(bot, redirectUri, lang));
   });
 
   app.get("/auth/me", requireAuth, (req, res) => {
