@@ -264,22 +264,30 @@ function formatGeminiError(status, errMsg, model) {
   if (/limit:\s*0/i.test(errMsg)) {
     return `Модель "${model}" недоступна на безкоштовному tier (ліміт 0). Оберіть gemini-2.5-flash у Налаштуваннях.`;
   }
-  if (status === 429) {
-    const retry = errMsg.match(/retry in ([\d.]+)s/i);
-    if (retry) {
-      return `Gemini: занадто багато запитів. Зачекайте ~${Math.ceil(Number(retry[1]))} сек і спробуйте знову.`;
-    }
-    return "Gemini: перевищено ліміт запитів. Зачекайте хвилину або змініть модель на gemini-2.5-flash-lite.";
+  if (
+    status === 429 ||
+    /high demand|overloaded|try again later|experiencing|resource.?exhausted|rate limit|too many requests/i.test(
+      errMsg
+    )
+  ) {
+    return "Асистент тимчасово зайнятий. Спробуйте ще раз.";
   }
   if (/not found|not supported|does not exist/i.test(errMsg)) {
     return "Модель Gemini недоступна. Використовуйте gemini-2.5-flash.";
   }
-  return `Gemini помилка: ${errMsg}`;
+  return `Gemini: ${errMsg}`;
+}
+
+function geminiSleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 function isRetryableGeminiError(status, errMsg) {
   if (/not found|not supported|does not exist/i.test(errMsg)) return true;
-  return status === 429 || /limit:\s*0/i.test(errMsg);
+  if (/high demand|overloaded|try again later|experiencing|unavailable|resource.?exhausted/i.test(errMsg)) {
+    return true;
+  }
+  return status === 429 || status === 503 || /limit:\s*0/i.test(errMsg);
 }
 
 async function geminiCallModel(apiKey, model, payload, signal) {
@@ -328,20 +336,27 @@ async function geminiGenerate(settings, { systemText, history, userParts }, sign
 
   for (let i = 0; i < models.length; i++) {
     const model = models[i];
-    const { response, body } = await geminiCallModel(apiKey, model, payload, signal);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const { response, body } = await geminiCallModel(apiKey, model, payload, signal);
 
-    if (response.ok) {
-      const data = JSON.parse(body);
-      const text = data?.candidates?.[0]?.content?.parts?.map((p) => p.text).join("").trim();
-      if (!text) throw new Error("Gemini повернув порожню відповідь");
-      return text;
+      if (response.ok) {
+        const data = JSON.parse(body);
+        const text = data?.candidates?.[0]?.content?.parts?.map((p) => p.text).join("").trim();
+        if (!text) throw new Error("Gemini повернув порожню відповідь");
+        return text;
+      }
+
+      const { errMsg, status } = parseGeminiError(body, response.status);
+      lastError = formatGeminiError(status, errMsg, model);
+
+      const retryable = isRetryableGeminiError(status, errMsg);
+      if (retryable && attempt < 2) {
+        await geminiSleep(700 + attempt * 800);
+        continue;
+      }
+      if (retryable && i < models.length - 1) break;
+      if (!retryable) break;
     }
-
-    const { errMsg, status } = parseGeminiError(body, response.status);
-    lastError = formatGeminiError(status, errMsg, model);
-
-    const canFallback = i < models.length - 1 && isRetryableGeminiError(status, errMsg);
-    if (!canFallback) break;
   }
 
   throw new Error(lastError || "Gemini: не вдалось отримати відповідь");

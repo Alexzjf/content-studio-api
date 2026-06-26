@@ -41,71 +41,45 @@
   <header class="window-chrome">
     <div class="chrome-row chrome-row-top">
       <div class="window-brand">
-        <img src="assets/icons/icon-32.png" alt="" class="window-mark" width="24" height="24" />
-        <img src="assets/logo.png" alt="cheatXtwitter" class="window-logo window-logo-full" />
+        <span class="wordmark wordmark-header" aria-label="cheatXtwitter">
+          <span class="wordmark-light">cheat</span><span class="wordmark-x">X</span><span class="wordmark-light">twitter</span>
+        </span>
       </div>
       <div class="chrome-row-top-actions">
+        <div class="view-mode-group view-mode-group-header" role="group" aria-label="View mode">
+          <button type="button" id="dockPanelBtn" class="view-mode-btn" data-i18n-title="dockPanel" title="Dock panel on the right">
+            <svg class="chrome-icon" width="16" height="16" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+              <rect x="1.5" y="3" width="15" height="12" rx="1.5" stroke="currentColor" stroke-width="1.4"/>
+              <line x1="12.25" y1="3" x2="12.25" y2="15" stroke="currentColor" stroke-width="1.2"/>
+              <rect x="12.25" y="3" width="4.25" height="12" rx="0.5" fill="currentColor" opacity="0.42"/>
+            </svg>
+          </button>
+          <button type="button" id="openWindowBtn" class="view-mode-btn" data-i18n-title="openWindow" title="Open in separate window">
+            <svg class="chrome-icon" width="16" height="16" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+              <rect x="2.5" y="4.5" width="10" height="10" rx="1.2" stroke="currentColor" stroke-width="1.4"/>
+              <path d="M6 4.5V3.5a1 1 0 0 1 1-1h7a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1h-1" stroke="currentColor" stroke-width="1.4"/>
+            </svg>
+          </button>
+          <button type="button" id="openFullscreenBtn" class="view-mode-btn" data-i18n-title="openFullscreen" title="Open fullscreen in browser">
+            <svg class="chrome-icon" width="16" height="16" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+              <path d="M3 6.5V4.5a1 1 0 0 1 1-1h2M11 3.5h2a1 1 0 0 1 1 1v2M14.5 11v2a1 1 0 0 1-1 1h-2M7 14.5H5a1 1 0 0 1-1-1v-2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+              <rect x="5.5" y="5.5" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.4"/>
+            </svg>
+          </button>
+        </div>
         <div id="panelWidthControl" class="panel-width-strip hidden">
           <span class="panel-width-label" data-i18n="panelWidth">Width</span>
           <input type="range" id="panelWidthSlider" class="panel-width-slider" min="25" max="75" value="25" aria-label="Panel width" />
           <span id="panelWidthValue" class="panel-width-value">25%</span>
         </div>
-        <button type="button" id="openSideInBrowserBtn" class="chrome-btn chrome-btn-side hidden" data-i18n-title="openSideInBrowser" title="Open side panel in browser">
-          <svg class="chrome-icon" width="14" height="14" viewBox="0 0 18 18" fill="none" aria-hidden="true">
-            <rect x="1.5" y="3" width="15" height="12" rx="1.5" stroke="currentColor" stroke-width="1.4"/>
-            <line x1="12.25" y1="3" x2="12.25" y2="15" stroke="currentColor" stroke-width="1.2"/>
-            <rect x="12.25" y="3" width="4.25" height="12" rx="0.5" fill="currentColor" opacity="0.42"/>
-          </svg>
-          <span class="chrome-btn-label" data-i18n="viewDockShort">Side</span>
-        </button>
-        <div id="embedViewSwitch" class="view-mode-group view-mode-group-compact hidden" role="group" aria-label="View mode">
-          <button type="button" id="openWindowFromEmbedBtn" class="view-mode-btn" data-i18n-title="openWindow" title="Open in separate window">
-            <svg class="chrome-icon" width="14" height="14" viewBox="0 0 18 18" fill="none" aria-hidden="true">
-              <rect x="2.5" y="4.5" width="10" height="10" rx="1.2" stroke="currentColor" stroke-width="1.4"/>
-              <path d="M6 4.5V3.5a1 1 0 0 1 1-1h7a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1h-1" stroke="currentColor" stroke-width="1.4"/>
-            </svg>
-            <span class="view-mode-label" data-i18n="viewWindowShort">Window</span>
-          </button>
-          <button type="button" id="openFullscreenFromEmbedBtn" class="view-mode-btn view-mode-btn-accent" data-i18n-title="openFullscreen" title="Open fullscreen in browser">
-            <svg class="chrome-icon" width="14" height="14" viewBox="0 0 18 18" fill="none" aria-hidden="true">
-              <path d="M3 6.5V4.5a1 1 0 0 1 1-1h2M11 3.5h2a1 1 0 0 1 1 1v2M14.5 11v2a1 1 0 0 1-1 1h-2M7 14.5H5a1 1 0 0 1-1-1v-2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-              <rect x="5.5" y="5.5" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.4"/>
-            </svg>
-            <span class="view-mode-label" data-i18n="viewFullscreenShort">Full</span>
-          </button>
-        </div>
         <button type="button" id="compactPanelBtn" class="chrome-btn chrome-btn-compact hidden" data-i18n-title="closeSurface" title="Close">
           <svg class="chrome-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
         </button>
-        <div class="header-lang lang-toggle" id="uiLangToggle">
-          <button type="button" class="toggle-btn toggle-btn-sm" data-lang="en" id="langEnBtn">EN</button>
-          <button type="button" class="toggle-btn toggle-btn-sm" data-lang="uk" id="langUkBtn">UA</button>
-        </div>
-      </div>
-    </div>
-    <div class="chrome-row chrome-row-view" id="viewToolbar">
-      <div class="view-mode-group" role="group" aria-label="View mode">
-        <button type="button" id="dockPanelBtn" class="view-mode-btn" data-i18n-title="dockPanel" title="Dock panel on the right">
-          <svg class="chrome-icon" width="16" height="16" viewBox="0 0 18 18" fill="none" aria-hidden="true">
-            <rect x="1.5" y="3" width="15" height="12" rx="1.5" stroke="currentColor" stroke-width="1.4"/>
-            <line x1="12.25" y1="3" x2="12.25" y2="15" stroke="currentColor" stroke-width="1.2"/>
-            <rect x="12.25" y="3" width="4.25" height="12" rx="0.5" fill="currentColor" opacity="0.42"/>
+        <button type="button" id="openAppSettingsBtn" class="chrome-btn chrome-btn-settings" data-i18n-title="settings" title="Settings" aria-haspopup="dialog" aria-controls="appSettingsDialog">
+          <svg class="chrome-icon" width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <path d="M10 12.2a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4Z" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M16.1 12.4l1.1.7a1 1 0 0 1 .4 1.1l-.2.7a1 1 0 0 1-.9.7 8.6 8.6 0 0 1-1.2 0 1 1 0 0 0-1 .6l-.2.9a1 1 0 0 1-1 .8h-1.4a1 1 0 0 1-1-.8l-.2-.9a1 1 0 0 0-1-.6 8.6 8.6 0 0 1-1.2 0 1 1 0 0 1-.9-.7l-.2-.7a1 1 0 0 1 .4-1.1l1.1-.7a1 1 0 0 0 .4-1l-.2-1.1a1 1 0 0 1 .6-.9l.7-.2a8.6 8.6 0 0 1 0-1.2 1 1 0 0 1-.6-.9l.2-.7a1 1 0 0 1 .9-.6h1.4a1 1 0 0 1 1 .6l.2.7a1 1 0 0 0 1 .6 8.6 8.6 0 0 1 1.2 0 1 1 0 0 1 .9.6l-.2.7a1 1 0 0 1-.6.9l-.2 1.1a1 1 0 0 0 .4 1Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
           </svg>
-          <span class="view-mode-label" data-i18n="viewDockShort">Side</span>
-        </button>
-        <button type="button" id="openWindowBtn" class="view-mode-btn" data-i18n-title="openWindow" title="Open in separate window">
-          <svg class="chrome-icon" width="16" height="16" viewBox="0 0 18 18" fill="none" aria-hidden="true">
-            <rect x="2.5" y="4.5" width="10" height="10" rx="1.2" stroke="currentColor" stroke-width="1.4"/>
-            <path d="M6 4.5V3.5a1 1 0 0 1 1-1h7a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1h-1" stroke="currentColor" stroke-width="1.4"/>
-          </svg>
-          <span class="view-mode-label" data-i18n="viewWindowShort">Window</span>
-        </button>
-        <button type="button" id="openFullscreenBtn" class="view-mode-btn view-mode-btn-accent" data-i18n-title="openFullscreen" title="Open fullscreen in browser">
-          <svg class="chrome-icon" width="16" height="16" viewBox="0 0 18 18" fill="none" aria-hidden="true">
-            <path d="M3 6.5V4.5a1 1 0 0 1 1-1h2M11 3.5h2a1 1 0 0 1 1 1v2M14.5 11v2a1 1 0 0 1-1 1h-2M7 14.5H5a1 1 0 0 1-1-1v-2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-            <rect x="5.5" y="5.5" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.4"/>
-          </svg>
-          <span class="view-mode-label" data-i18n="viewFullscreenShort">Full</span>
         </button>
       </div>
     </div>
@@ -115,7 +89,9 @@
   <div class="app">
     <aside class="sidebar">
       <header class="brand brand-sidebar">
-        <img src="assets/logo.png" alt="cheatXtwitter" class="brand-logo" />
+        <span class="wordmark wordmark-brand" aria-label="cheatXtwitter">
+          <span class="wordmark-light">cheat</span><span class="wordmark-x">X</span><span class="wordmark-light">twitter</span>
+        </span>
         <p data-i18n="brandSubtitle">Smart posts for X</p>
       </header>
 
@@ -180,10 +156,6 @@
                   <input type="password" id="ownApiKey" autocomplete="off" data-i18n-placeholder="ownApiKeyPlaceholder" />
                 </label>
                 <p class="field-hint" id="ownApiKeyHint"></p>
-                <label><span data-i18n="ownModelLabel">Model</span>
-                  <input type="text" id="ownModel" list="ownModelsList" autocomplete="off" />
-                </label>
-                <datalist id="ownModelsList"></datalist>
                 <button type="button" id="testApiBtn" class="btn btn-ghost btn-sm" style="margin-top:8px;width:100%" data-i18n="testApi">Test API</button>
               </div>
 
@@ -266,7 +238,6 @@
             </svg>
             <span class="btn-reload-label" data-i18n="reloadAssistantShort">Reload</span>
           </button>
-          <button type="button" id="copyBtn" class="btn btn-ghost btn-sm" data-i18n="copy">Copy</button>
           <button type="button" id="insertBtn" class="btn btn-primary btn-sm" data-i18n="insertX">Insert on X</button>
         </div>
       </div>
@@ -283,18 +254,26 @@
         </div>
       </div>
 
-      <div class="draft-panel">
-        <label for="postText" data-i18n="draftLabel">Your post</label>
-        <textarea id="postText" rows="5" data-i18n-placeholder="draftPlaceholder"></textarea>
-        <div class="char-count"><span id="charCount">0</span> <span data-i18n="chars">characters</span></div>
-      </div>
-
       <form id="chatForm" class="chat-input-row">
         <input type="text" id="chatInput" data-i18n-placeholder="chatPlaceholder" />
         <button type="submit" id="chatSendBtn" class="btn btn-primary" data-i18n="send">Send</button>
       </form>
     </main>
   </div>
+
+  <dialog id="appSettingsDialog" class="app-settings-dialog">
+    <form method="dialog" id="appSettingsForm">
+      <h3 data-i18n="settings">Settings</h3>
+      <label class="settings-field">
+        <span data-i18n="uiLang">Interface language</span>
+        <select id="appSettingsLang"></select>
+      </label>
+      <p class="field-hint" data-i18n="settingsMoreSoon">More options will appear here later.</p>
+      <div class="dialog-actions">
+        <button type="button" id="appSettingsCloseBtn" class="btn btn-ghost" data-i18n="close">Close</button>
+      </div>
+    </form>
+  </dialog>
 
   <dialog id="pasteDialog">
     <form method="dialog" id="pasteForm">

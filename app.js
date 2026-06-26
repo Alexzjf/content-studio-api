@@ -1,4 +1,4 @@
-const APP_VERSION = "1.34.5";
+const APP_VERSION = "1.34.8";
 
 let chatStatusTicker = null;
 let hostedWarmAt = 0;
@@ -132,6 +132,9 @@ function hostedApiHeaders(base) {
 function shouldSuppressStatusError(text) {
   const msg = String(text || "");
   if (msg === "__silent_ai__") return true;
+  if (/gemini|openai|anthropic|cursor|api key|quota|rate limit|high demand|overloaded|try again|experiencing|403|429|502|503|forbidden|resource.?exhausted/i.test(msg)) {
+    return true;
+  }
   return /importScripts|WorkerGlobalScope|service worker/i.test(msg);
 }
 
@@ -155,11 +158,8 @@ function formatApiError(status, data, base) {
     }
     return t("aiSharedUnavailable");
   }
-  if (status === 502 && raw) {
-    if (/Ліміт Gemini|quota|rate limit|resource.?exhausted|зайнят/i.test(raw)) {
-      return t("aiSharedUnavailable");
-    }
-    return raw;
+  if (status === 502) {
+    return t("aiSharedUnavailable");
   }
   if (status === 404) {
     if (base.includes("localhost") || base.includes("127.0.0.1")) {
@@ -169,6 +169,12 @@ function formatApiError(status, data, base) {
   }
   if (status === 429) {
     return t("aiSharedUnavailable");
+  }
+  if (status === 403) {
+    return t("aiSharedUnavailable");
+  }
+  if (status === 413) {
+    return t("chatHistoryTooLong");
   }
   return raw || `API помилка (${status})`;
 }
@@ -184,26 +190,29 @@ function wrapNetworkError(err) {
 function isRetryableAiError(status, raw) {
   const msg = String(raw || "");
   return (
+    status === 403 ||
     status === 429 ||
     status === 502 ||
     status === 503 ||
-    /Ліміт Gemini|тимчасово зайнятий|high demand|overloaded|quota|rate limit|resource.?exhausted|зачекайте/i.test(
+    /Ліміт Gemini|тимчасово зайнятий|high demand|overloaded|quota|rate limit|resource.?exhausted|зачекайте|forbidden/i.test(
       msg
     )
   );
 }
 
-function retryWaitSec(_status, _data, _raw) {
+function retryWaitSec(status, data, _raw) {
+  if (data?.retryAfterSec) return Math.min(8, Math.max(2, Number(data.retryAfterSec)));
+  if (status === 429 || status === 503) return 4;
   return 2;
 }
 
 async function hostedApiPost(path, body, settings, timeoutMs = 45000, externalSignal) {
   const bases = getHostedApiBases(settings);
-  const deadline = Date.now() + 60000;
+  const deadline = Date.now() + 95000;
   let lastError = null;
 
   for (const base of bases) {
-    for (let rateTry = 0; rateTry < 2; rateTry++) {
+    for (let rateTry = 0; rateTry < 4; rateTry++) {
       if (externalSignal?.aborted) {
         throw new Error("__chat_aborted__");
       }
@@ -222,9 +231,17 @@ async function hostedApiPost(path, body, settings, timeoutMs = 45000, externalSi
           body: JSON.stringify(body),
           signal: controller.signal,
         });
-        const data = await response.json().catch(() => ({}));
+        const rawText = await response.text();
+        let data = {};
+        try {
+          data = rawText ? JSON.parse(rawText) : {};
+        } catch {
+          data = {};
+        }
         if (!response.ok) {
-          const raw = data?.error || "";
+          const raw =
+            data?.error ||
+            (rawText && rawText.length < 240 && !/<html/i.test(rawText) ? rawText.trim() : "");
           if (isRetryableAiError(response.status, raw) && rateTry === 0 && Date.now() < deadline) {
             const sec = retryWaitSec(response.status, data, raw);
             setStatus(t("aiThinking"));
@@ -340,10 +357,17 @@ function isSharedQuotaError(err) {
   const msg = String(err?.message || "");
   return (
     msg === "__silent_ai__" ||
-    /quota|ліміт|зайнят|busy|429|rate limit|resource.?exhausted|хмарн.*gemini|shared gemini/i.test(
+    msg === t("aiSharedUnavailable") ||
+    msg === t("aiSharedBusy") ||
+    msg === t("chatHistoryTooLong") ||
+    /gemini|quota|ліміт|зайнят|busy|429|403|forbidden|api помилка|rate limit|resource.?exhausted|high demand|overloaded|try again|experiencing|тимчасово недоступн|тимчасово зайнят/i.test(
       msg
     )
   );
+}
+
+function isRetryableSharedError(err) {
+  return isSharedQuotaError(err);
 }
 
 async function callSharedGeminiDirect(sources, settings, history, signal, apiKey) {
@@ -369,24 +393,20 @@ async function hostedChatDirect(sources, settings, history, signal) {
   }
 
   if (Date.now() - hostedWarmAt >= HOSTED_WARM_TTL_MS) {
-    setStatus(t("serverWaking"), "");
+    setStatus(t("aiThinking"));
     await warmHostedServer({ showStatus: false });
   }
-  try {
-    const data = await hostedApiPost("/v1/chat", { sources, settings, history }, settings, 28000, signal);
-    if (!data.text?.trim()) throw new Error("Empty AI response");
-    return data.text.trim();
-  } catch (err) {
-    const fallbackKey = ownApiKeysCache.gemini?.trim();
-    if (fallbackKey && isSharedQuotaError(err)) {
-      setStatus(t("aiSharedFallbackOwnKey"), "");
-      return callSharedGeminiDirect(sources, settings, history, signal, fallbackKey);
-    }
-    if (isSharedQuotaError(err)) {
-      throw new Error(t("aiSharedUnavailable"));
-    }
-    throw err;
-  }
+
+  setStatus(t("aiThinking"));
+  const data = await hostedApiPost(
+    "/v1/chat",
+    { sources, settings, history: trimHistoryForApi(history) },
+    settings,
+    90000,
+    signal
+  );
+  if (!data.text?.trim()) throw new Error("Empty AI response");
+  return data.text.trim();
 }
 
 async function hostedDescribeDirect(imageBase64, settings) {
@@ -511,7 +531,11 @@ async function callChatViaBackground(sources, settings, history, provider) {
 }
 
 async function callChatWithSources(sources, settings, history, signal) {
-  const provider = settings.aiProvider || "hosted";
+  const provider =
+    settings.aiConnectionMode === "shared" || getAiConnectionMode() === "shared"
+      ? "hosted"
+      : settings.aiProvider || "hosted";
+  settings = { ...settings, aiProvider: provider };
 
   const runInPage = async () => {
     await ensureAiReady();
@@ -655,7 +679,6 @@ async function bootApp() {
     await restoreChatHistory();
     if (!chatHistory.length) renderChatEmpty();
     renderSources();
-    updateCharCount();
     updateSettingsVersion();
     if (!document.body.classList.contains("mode-toolbar-popup")) {
       $("settingsDetails")?.setAttribute("open", "");
@@ -686,18 +709,14 @@ function getUiLang() {
   return uiLang;
 }
 
-function setUiLangToggle(lang) {
-  document.querySelectorAll("#uiLangToggle [data-lang]").forEach((btn) => {
-    const active = btn.dataset.lang === lang;
-    btn.classList.toggle("active", active);
-    btn.setAttribute("aria-pressed", String(active));
-  });
+function syncAppSettingsLang(lang) {
+  window.AppChrome?.syncAppSettingsLang?.(lang);
 }
 
 async function setUiLang(lang, persist = true) {
   if (!lang) return;
-  uiLang = lang === "uk" ? "uk" : "en";
-  setUiLangToggle(uiLang);
+  uiLang = window.I18n?.normalizeUiLang?.(lang) || (lang === "uk" ? "uk" : "en");
+  syncAppSettingsLang(uiLang);
 
   if (uiLang === "uk" && $("postLang")?.value === "auto") {
     setSelectValue("postLang", "uk");
@@ -705,7 +724,7 @@ async function setUiLang(lang, persist = true) {
 
   if (typeof I18n !== "undefined") {
     I18n.setLocale(uiLang);
-    document.documentElement.lang = uiLang === "uk" ? "uk" : "en";
+    document.documentElement.lang = uiLang;
     I18n.applyPageI18n();
     document.title = `${I18n.t("brandTitle")}`;
   }
@@ -753,8 +772,9 @@ async function loadSettings() {
   }
 
   uiLang = settings.uiLang ?? (typeof I18n !== "undefined" ? I18n.detectLocale() : "en");
+  uiLang = I18n?.normalizeUiLang?.(uiLang) || uiLang;
   window.__uiLang = uiLang;
-  setUiLangToggle(uiLang);
+  syncAppSettingsLang(uiLang);
 
   ownApiKeysCache = { ...(settings.ownApiKeys || {}) };
   ownModelsCache = { ...(settings.ownModels || {}) };
@@ -1019,11 +1039,11 @@ function openOwnKeySettings() {
 
 function applyLocale(showSavedStatus = false) {
   const lang = window.AppChrome?.getUiLang() || getUiLang() || I18n.getLocale() || I18n.detectLocale();
-  uiLang = lang === "uk" ? "uk" : "en";
+  uiLang = I18n?.normalizeUiLang?.(lang) || (lang === "uk" ? "uk" : "en");
   window.AppChrome?.applyUiLang(uiLang);
-  setUiLangToggle(uiLang);
+  syncAppSettingsLang(uiLang);
   I18n.setLocale(uiLang);
-  document.documentElement.lang = uiLang === "uk" ? "uk" : "en";
+  document.documentElement.lang = uiLang;
   I18n.applyPageI18n();
   document.title = `${I18n.t("brandTitle")}`;
   updateAiMode();
@@ -1203,7 +1223,6 @@ function bindEvents() {
     $("pasteDialog").close();
   });
 
-  $("copyBtn")?.addEventListener("click", copyDraft);
   $("insertBtn")?.addEventListener("click", insertToX);
   $("reloadAssistantBtn")?.addEventListener("click", (e) => {
     e.preventDefault();
@@ -1213,7 +1232,6 @@ function bindEvents() {
     e.preventDefault();
     sendChatMessage($("chatInput").value.trim());
   });
-  $("postText")?.addEventListener("input", updateCharCount);
 
   document.querySelectorAll(".chip").forEach((chip) => {
     chip.addEventListener("click", () => {
@@ -1474,7 +1492,7 @@ function formatOwnApiError(message, provider) {
   if (/invalid.*api.*key|incorrect api key|authentication|unauthorized|invalid_api_key/i.test(msg)) {
     return t("ownApiKeyInvalid").replace("{provider}", name);
   }
-  if (/rate limit|too many requests|429/i.test(msg)) {
+  if (/rate limit|too many requests|429|high demand|overloaded|try again|experiencing/i.test(msg)) {
     return t("ownApiRateLimit").replace("{provider}", name);
   }
   if (msg.length > 100) {
@@ -1485,7 +1503,9 @@ function formatOwnApiError(message, provider) {
 
 function setStatus(text, type = "") {
   const ownMode = getAiConnectionMode() === "own";
-  if (type === "error" && (!text || text === "__silent_ai__")) {
+  if (type === "error" && !ownMode) {
+    text = t("aiSharedUnavailable");
+  } else if (type === "error" && (!text || text === "__silent_ai__")) {
     text = ownMode
       ? "AI не відповів. Перевірте API ключ у Налаштуваннях."
       : t("aiSharedUnavailable");
@@ -1548,13 +1568,6 @@ function updateChatState() {
   }
 }
 
-function updateCharCount() {
-  const post = $("postText");
-  const count = $("charCount");
-  if (!post || !count) return;
-  count.textContent = String(post.value.length);
-}
-
 function renderChatEmpty() {
   $("chatMessages").innerHTML = `
     <div class="chat-empty">
@@ -1569,7 +1582,28 @@ function appendMessage(role, text) {
 
   const div = document.createElement("div");
   div.className = `msg ${role} msg-enter`;
-  div.textContent = text;
+  div.dataset.rawText = text;
+
+  if (role === "assistant") {
+    const body = document.createElement("div");
+    body.className = "msg-body";
+    body.textContent = text;
+
+    const actions = document.createElement("div");
+    actions.className = "msg-actions";
+    const copyBtn = document.createElement("button");
+    copyBtn.type = "button";
+    copyBtn.className = "btn btn-ghost btn-sm msg-copy-btn";
+    copyBtn.textContent = t("copy");
+    copyBtn.addEventListener("click", () => void copyMessageText(text, copyBtn));
+
+    actions.appendChild(copyBtn);
+    div.appendChild(body);
+    div.appendChild(actions);
+  } else {
+    div.textContent = text;
+  }
+
   $("chatMessages").appendChild(div);
   $("chatMessages").scrollTop = $("chatMessages").scrollHeight;
 }
@@ -1695,6 +1729,19 @@ function historyForApi(history) {
   return history.filter((m) => !(m.role === "assistant" && isBadPostOutput(m.content)));
 }
 
+function trimHistoryForApi(history) {
+  const filtered = historyForApi(history);
+  const maxMessages = 14;
+  const maxCharsPerMessage = 6000;
+  return filtered.slice(-maxMessages).map((m) => {
+    const content = String(m.content || "");
+    if (content.length <= maxCharsPerMessage) {
+      return { role: m.role, content };
+    }
+    return { role: m.role, content: `${content.slice(0, maxCharsPerMessage)}…` };
+  });
+}
+
 function detectChatMode(text, options = {}) {
   if (options.mode === "qa" || options.mode === "post") return options.mode;
 
@@ -1789,8 +1836,17 @@ function applyPostConstraintsFromUserMessage(settings, text) {
   return settings;
 }
 
+function getLastAssistantDraft() {
+  for (let i = chatHistory.length - 1; i >= 0; i--) {
+    if (chatHistory[i]?.role === "assistant" && chatHistory[i]?.content?.trim()) {
+      return chatHistory[i].content.trim();
+    }
+  }
+  return "";
+}
+
 function shouldExpandDraft(text, settings) {
-  const draft = $("postText")?.value?.trim();
+  const draft = getLastAssistantDraft();
   if (!draft) return false;
   if (isExpandPostRequest(text)) return true;
   if (settings.minPostChars >= 350) return true;
@@ -1803,7 +1859,7 @@ function isExpandPostRequest(text) {
 }
 
 async function expandExistingPost(settings, userPrompt, signal) {
-  const draft = $("postText")?.value?.trim();
+  const draft = getLastAssistantDraft();
   const mediaSources = prepareSourcesForChat(getReadySources(), "qa");
   const sources = draft
     ? [...mediaSources, { type: "text", name: "Current draft", content: draft }]
@@ -1876,7 +1932,6 @@ async function generatePostFromVideo(settings, userPrompt, signal) {
   );
 
   if (minLen && reply.length < minLen * 0.85) {
-    $("postText").value = reply;
     reply = await expandExistingPost({ ...settings, minPostChars: minLen }, userPrompt, signal);
   } else if (isBadPostOutput(reply)) {
     reply = extractPostText(
@@ -1988,8 +2043,6 @@ async function sendChatMessage(text, options = {}) {
         }
         replyText = extractPostText(replyText);
       }
-      $("postText").value = replyText;
-      updateCharCount();
     } else {
       replyText = await callChatWithSources(readySources, settings, chatHistory, signal);
     }
@@ -2010,24 +2063,18 @@ async function sendChatMessage(text, options = {}) {
       return;
     }
     let msg = err?.message || "";
-    if (msg === "__silent_ai__" || (getAiConnectionMode() === "shared" && isSharedQuotaError(err))) {
+    if (getAiConnectionMode() === "shared") {
+      flashSharedUnavailable();
+    } else if (msg === "__silent_ai__") {
       flashSharedUnavailable();
     } else if (msg) {
-      const display =
-        getAiConnectionMode() === "own"
-          ? formatOwnApiError(msg, getAiOwnProvider())
-          : msg;
-      setStatus(display, "error");
-      if (getAiConnectionMode() === "own") {
-        setTimeout(() => setStatus("", ""), 5000);
-      }
-    } else if (getAiConnectionMode() === "own") {
+      setStatus(formatOwnApiError(msg, getAiOwnProvider()), "error");
+      setTimeout(() => setStatus("", ""), 5000);
+    } else {
       setStatus(
         "AI не відповів. Перевірте API ключ, модель composer-2.5 і Reload розширення.",
         "error"
       );
-    } else {
-      flashSharedUnavailable();
     }
     void persistChatHistory();
   } finally {
@@ -2059,35 +2106,41 @@ async function copyTextToClipboard(text) {
   }
 }
 
-function getTextForCopyInsert() {
-  const draft = $("postText")?.value?.trim();
-  if (draft) return draft;
-
+function getTextForInsert() {
   for (let i = chatHistory.length - 1; i >= 0; i--) {
-    if (chatHistory[i]?.role === "assistant" && chatHistory[i]?.content?.trim()) {
-      return chatHistory[i].content.trim();
+    if (chatHistory[i]?.role === "assistant") {
+      const content = chatHistory[i].content;
+      if (content != null && String(content).trim()) return String(content);
     }
   }
 
   for (let i = chatHistory.length - 1; i >= 0; i--) {
-    if (chatHistory[i]?.role === "user" && chatHistory[i]?.content?.trim()) {
-      return chatHistory[i].content.trim();
+    if (chatHistory[i]?.role === "user") {
+      const content = chatHistory[i].content;
+      if (content != null && String(content).trim()) return String(content);
     }
   }
 
-  const chatInput = $("chatInput")?.value?.trim();
-  if (chatInput) return chatInput;
+  const chatInput = $("chatInput")?.value;
+  if (chatInput != null && String(chatInput).trim()) return String(chatInput);
 
   const msgs = $("chatMessages");
   if (msgs) {
-    const nodes = msgs.querySelectorAll(".msg.assistant, .msg.user");
+    const nodes = msgs.querySelectorAll(".msg.assistant");
     for (let i = nodes.length - 1; i >= 0; i--) {
-      const text = nodes[i]?.textContent?.trim();
-      if (text) return text;
+      const raw =
+        nodes[i]?.dataset?.rawText ??
+        nodes[i]?.querySelector(".msg-body")?.textContent ??
+        "";
+      if (String(raw).trim()) return String(raw);
     }
   }
 
   return "";
+}
+
+function hasInsertableText(text) {
+  return String(text || "").trim().length > 0;
 }
 
 function flashActionStatus(text, type = "success") {
@@ -2101,23 +2154,24 @@ function flashActionStatus(text, type = "success") {
   }
 }
 
-async function copyDraft() {
-  const text = getTextForCopyInsert();
-  if (!text) {
-    flashActionStatus(t("noTextToCopy"), "error");
-    return;
-  }
+async function copyMessageText(text, btn) {
   const ok = await copyTextToClipboard(text);
   if (!ok) {
     flashActionStatus(t("copyFailed"), "error");
     return;
   }
-  flashActionStatus(t("copied"), "success");
+  const prev = btn.textContent;
+  btn.textContent = t("copied");
+  btn.disabled = true;
+  setTimeout(() => {
+    btn.textContent = prev || t("copy");
+    btn.disabled = false;
+  }, 1600);
 }
 
 async function insertToX() {
-  const text = getTextForCopyInsert();
-  if (!text) {
+  const text = getTextForInsert();
+  if (!hasInsertableText(text)) {
     flashActionStatus(t("noTextToInsert"), "error");
     return;
   }

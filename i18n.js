@@ -17,6 +17,7 @@ const LOCALES = {
     aiSharedHint:
       "Shared server for everyone — delays and temporary overload are possible.",
     aiSharedUnavailable: "Shared server temporarily unavailable. Try again later.",
+    chatHistoryTooLong: "Chat is too long. Clear chat history (trash icon) and try again.",
     serverWaking: "Waking shared server… first idle request may take ~30–45 s",
     serverReady: "Server ready — sending your message…",
     aiOwnProviderLabel: "AI service",
@@ -24,6 +25,9 @@ const LOCALES = {
     ownApiKeyPlaceholder: "Paste your API key",
     ownModelLabel: "Model",
     ownApiKeyRequired: "Add your API key in Settings",
+    ownApiQuotaExceeded: "{provider}: API quota exceeded. Check billing or switch AI service.",
+    ownApiKeyInvalid: "{provider}: invalid API key.",
+    ownApiRateLimit: "{provider}: too many requests. Wait a moment.",
     ownApiKeyForProvider: "Paste {provider} API key in Settings below",
     aiKeyReady: "{provider} API key saved — you can chat now",
     aiOwnFlowHint: "Pick any AI service → paste your API key → chat works immediately.",
@@ -81,6 +85,13 @@ const LOCALES = {
       "e.g. first person, no emojis, max 200 characters, practical tone…",
     saveSettings: "Save",
     chat: "Chat",
+    tabChat: "Chat",
+    tabSources: "Sources",
+    tabSettings: "Settings",
+    assistantName: "AI Assistant",
+    postPreviewHandle: "@your_post",
+    postReady: "Draft",
+    threadPart: "Part {n}/{total}",
     copy: "Copy",
     insertX: "Insert on X",
     draftLabel: "Your post",
@@ -180,6 +191,8 @@ const LOCALES = {
     viewFullscreenShort: "Full",
     openSideInBrowser: "Open side panel in browser",
     closeSurface: "Close",
+    close: "Close",
+    settingsMoreSoon: "More options will appear here later.",
   },
   uk: {
     brandTitle: "cheatXtwitter",
@@ -198,6 +211,7 @@ const LOCALES = {
     aiConnectionOwn: "Мій власний API ключ",
     aiSharedHint: "Спільний сервер для всіх — можливі затримки та тимчасове перевантаження.",
     aiSharedUnavailable: "Спільний сервер тимчасово недоступний. Спробуйте пізніше.",
+    chatHistoryTooLong: "Чат занадто довгий. Очистіть історію (іконка кошика) і спробуйте знову.",
     aiSharedFallbackOwnKey: "Спільний сервер зайнятий — використовую ваш збережений ключ Gemini…",
     serverWaking: "Прокидаємо спільний сервер… перший запит після паузи ~30–45 с",
     serverReady: "Сервер готовий — надсилаємо повідомлення…",
@@ -206,6 +220,9 @@ const LOCALES = {
     ownApiKeyPlaceholder: "Вставте ваш API ключ",
     ownModelLabel: "Модель",
     ownApiKeyRequired: "Додайте API ключ у Налаштуваннях",
+    ownApiQuotaExceeded: "{provider}: квота API вичерпана. Перевірте баланс або оберіть інший сервіс.",
+    ownApiKeyInvalid: "{provider}: невірний API ключ.",
+    ownApiRateLimit: "{provider}: занадто багато запитів. Зачекайте хвилину.",
     ownApiKeyForProvider: "Вставте API ключ {provider} у Налаштуваннях нижче",
     aiKeyReady: "Ключ {provider} збережено — можна писати в чат",
     aiOwnFlowHint: "Оберіть AI сервіс → вставте API ключ → чат одразу працює.",
@@ -263,6 +280,13 @@ const LOCALES = {
       "Напр.: від першої особи, без емодзі, макс 200 символів, практичний тон…",
     saveSettings: "Зберегти",
     chat: "Чат",
+    tabChat: "Чат",
+    tabSources: "Джерела",
+    tabSettings: "Налашт.",
+    assistantName: "AI Асистент",
+    postPreviewHandle: "@ваш_пост",
+    postReady: "Чернетка",
+    threadPart: "Частина {n}/{total}",
     copy: "Копіювати",
     insertX: "Вставити на X",
     draftLabel: "Ваш пост",
@@ -304,7 +328,7 @@ const LOCALES = {
     noSubstance:
       "У відео лише вступ/хук без корисних фактів для поста. Натисни «Що в відео?» для розбору або додай інше джерело.",
     done: "Готово: {name}",
-    aiThinking: "Асистент думає…",
+    aiThinking: "Асистент думає",
     cursorThinking: "Cursor працює… (30–120 с)",
     reloadAssistant: "Перезавантажити асистента (історія чату збережеться)",
     reloadAssistantShort: "Оновити",
@@ -362,20 +386,99 @@ const LOCALES = {
     viewFullscreenShort: "Екран",
     openSideInBrowser: "Відкрити бік у браузері",
     closeSurface: "Закрити",
+    close: "Закрити",
+    settingsMoreSoon: "Інші опції з’являться тут пізніше.",
   },
+};
+
+const UI_LANG_OPTIONS = [
+  { code: "uk", label: "Українська" },
+  { code: "en", label: "English" },
+  { code: "ru", label: "Русский" },
+  { code: "de", label: "Deutsch" },
+  { code: "es", label: "Español" },
+  { code: "fr", label: "Français" },
+  { code: "pl", label: "Polski" },
+  { code: "pt", label: "Português" },
+  { code: "it", label: "Italiano" },
+  { code: "tr", label: "Türkçe" },
+  { code: "zh", label: "中文" },
+  { code: "ja", label: "日本語" },
+  { code: "ko", label: "한국어" },
+];
+
+const UI_LANG_CODES = UI_LANG_OPTIONS.map((o) => o.code);
+
+LOCALES.ru = {
+  ...LOCALES.en,
+  brandSubtitle: "Умные посты для X",
+  sources: "Источники",
+  noSources: "Источников пока нет. Добавьте видео, аудио, текст или изображения.",
+  videoAudio: "Видео / аудио",
+  photo: "Фото / изображение",
+  textFile: "Текстовый файл",
+  pasteText: "Вставить текст",
+  settings: "Настройки",
+  uiLang: "Язык интерфейса",
+  settingsMoreSoon: "Другие опции появятся здесь позже.",
+  close: "Закрыть",
+  chat: "Чат",
+  send: "Отправить",
+  copy: "Копировать",
+  saveSettings: "Сохранить",
+  chatPlaceholder: "Спросите AI или сгенерируйте пост…",
+  chatEmpty1: "Чат с AI — видео не обязательно.",
+  chatEmpty2: "Добавьте источники слева или просто задайте вопрос.",
+  insertX: "Вставить в X",
+  reloadAssistantShort: "Перезагрузить",
+  viewDockShort: "Бок",
+  viewWindowShort: "Окно",
+  viewFullscreenShort: "Экран",
+  dockPanel: "Боковая панель",
+  openWindow: "Отдельное окно",
+  openFullscreen: "На весь экран в браузере",
+  panelWidth: "Ширина",
+  chipGenerateLabel: "Сгенерировать пост",
+  chipVideoLabel: "Что в видео?",
+  pasteTitle: "Вставить текст",
+  cancel: "Отмена",
+  add: "Добавить",
+  ready: "Готово",
+  settingsSaved: "Сохранено",
 };
 
 let currentLocale = "en";
 
+function normalizeUiLang(lang) {
+  const code = String(lang || "en").toLowerCase();
+  return UI_LANG_CODES.includes(code) ? code : "en";
+}
+
 function detectLocale() {
   const lang = (navigator.language || "en").toLowerCase();
-  if (lang.startsWith("uk")) return "uk";
+  const prefixes = [
+    ["uk", "uk"],
+    ["ru", "ru"],
+    ["de", "de"],
+    ["es", "es"],
+    ["fr", "fr"],
+    ["pl", "pl"],
+    ["pt", "pt"],
+    ["it", "it"],
+    ["tr", "tr"],
+    ["zh", "zh"],
+    ["ja", "ja"],
+    ["ko", "ko"],
+  ];
+  for (const [prefix, code] of prefixes) {
+    if (lang.startsWith(prefix)) return code;
+  }
   return "en";
 }
 
 function setLocale(locale) {
-  currentLocale = LOCALES[locale] ? locale : "en";
-  document.documentElement.lang = currentLocale === "uk" ? "uk" : "en";
+  currentLocale = normalizeUiLang(locale);
+  document.documentElement.lang = currentLocale;
 }
 
 function getLocale() {
@@ -435,5 +538,14 @@ function applyPageI18n() {
 }
 
 if (typeof window !== "undefined") {
-  window.I18n = { setLocale, getLocale, t, applyPageI18n, detectLocale };
+  window.I18n = {
+    setLocale,
+    getLocale,
+    t,
+    applyPageI18n,
+    detectLocale,
+    normalizeUiLang,
+    UI_LANG_OPTIONS,
+    UI_LANG_CODES,
+  };
 }
