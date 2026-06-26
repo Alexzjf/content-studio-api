@@ -1,3 +1,8 @@
+try {
+  importScripts("auth-config.local.js");
+} catch (_) {
+  /* optional: copy auth-config.local.js.example → auth-config.local.js */
+}
 importScripts(
   "extension-config.js",
   "panel-config.js",
@@ -38,7 +43,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "AUTH_X_OAUTH") {
-    authXOAuth()
+    authXOAuth(message)
       .then(sendResponse)
       .catch((err) => sendResponse({ error: err.message }));
     return true;
@@ -581,8 +586,8 @@ async function pkceChallenge(verifier) {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-async function authXOAuth() {
-  const clientId = globalThis.EXTENSION_CONFIG?.xClientId;
+async function authXOAuth(opts = {}) {
+  const clientId = opts.clientId || globalThis.EXTENSION_CONFIG?.xClientId;
   if (!clientId) throw new Error("X OAuth not configured");
 
   const redirectUrl = chrome.identity.getRedirectURL("x");
@@ -614,9 +619,15 @@ async function authXOAuth() {
   const code = parsed.searchParams.get("code");
   if (!code) throw new Error("Missing OAuth code");
 
+  const clientSecret = opts.clientSecret || globalThis.EXTENSION_CONFIG?.xClientSecret || "";
+  const tokenHeaders = { "Content-Type": "application/x-www-form-urlencoded" };
+  if (clientSecret) {
+    tokenHeaders.Authorization = `Basic ${btoa(`${clientId}:${clientSecret}`)}`;
+  }
+
   const tokenRes = await fetch("https://api.twitter.com/2/oauth2/token", {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    headers: tokenHeaders,
     body: new URLSearchParams({
       code,
       grant_type: "authorization_code",

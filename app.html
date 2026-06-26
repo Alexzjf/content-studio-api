@@ -258,6 +258,9 @@ body.mode-auth-page {
 
     <div class="settings-shell">
       <nav class="settings-nav" aria-label="Settings sections">
+        <p class="settings-nav-group" data-i18n="settingsNavAccount">Account</p>
+        <button type="button" class="settings-nav-item" data-section="profile" data-i18n="settingsNavProfile">Profile</button>
+
         <p class="settings-nav-group" data-i18n="settingsNavExtension">Extension</p>
         <button type="button" class="settings-nav-item active" data-section="general" data-i18n="settingsNavGeneral">General</button>
 
@@ -270,6 +273,53 @@ body.mode-auth-page {
       </nav>
 
       <div class="settings-panels">
+        <section class="settings-panel" data-panel="profile">
+          <header class="settings-panel-head">
+            <h2 data-i18n="settingsNavProfile">Profile</h2>
+            <p data-i18n="settingsPanelProfileDesc">Your account and sign-in methods.</p>
+          </header>
+
+          <div class="profile-card" id="profileCard">
+            <div class="profile-avatar" id="profileAvatar" aria-hidden="true">?</div>
+            <div class="profile-card-body">
+              <p class="profile-name" id="profileName">—</p>
+              <p class="profile-email" id="profileEmail">—</p>
+              <span class="profile-provider-badge" id="profileProviderBadge">—</span>
+            </div>
+          </div>
+
+          <div class="profile-meta">
+            <p class="profile-meta-label" data-i18n="profileSignedInVia">Signed in via</p>
+            <p class="profile-meta-value" id="profileProvidersList">—</p>
+          </div>
+
+          <div id="profileRecoveryBlock" class="profile-recovery hidden">
+            <header class="settings-panel-head settings-panel-head-row">
+              <div>
+                <h3 data-i18n="profileRecoveryTitle">Recovery email</h3>
+                <p data-i18n="profileRecoveryDesc">Link a real email and password to restore access if you lose X or Telegram.</p>
+              </div>
+            </header>
+            <p id="profileRecoveryLinked" class="profile-recovery-linked hidden"></p>
+            <form id="profileLinkEmailForm" class="profile-link-form">
+              <label class="field">
+                <span data-i18n="authEmail">Email</span>
+                <input type="email" id="profileRecoveryEmail" autocomplete="email" data-i18n-placeholder="authEmailPlaceholder" />
+              </label>
+              <label class="field">
+                <span data-i18n="authPassword">Password</span>
+                <input type="password" id="profileRecoveryPassword" minlength="6" autocomplete="new-password" data-i18n-placeholder="authPasswordPlaceholder" />
+              </label>
+              <p id="profileRecoveryError" class="profile-form-error hidden" role="alert"></p>
+              <button type="submit" class="btn btn-primary btn-sm" id="profileLinkEmailBtn" data-i18n="profileLinkEmailBtn">Link email for recovery</button>
+            </form>
+          </div>
+
+          <div class="profile-actions">
+            <button type="button" id="profileSignOutBtn" class="btn btn-ghost profile-sign-out" data-i18n="profileSignOut">Sign out</button>
+          </div>
+        </section>
+
         <section class="settings-panel active" data-panel="general">
           <header class="settings-panel-head">
             <h2 data-i18n="settingsNavGeneral">General</h2>

@@ -22,5 +22,6 @@
 var AUTH_LOCAL = {
   googleClientId: "",
   telegramBotUsername: "",
-  xClientId: "",
+  xClientId: _authLocal.xClientId || "",
+  xClientSecret: _authLocal.xClientSecret || "",
 };

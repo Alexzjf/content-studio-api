@@ -113,6 +113,13 @@
     el.textContent = text || "";
     el.className = "header-status" + (type ? ` ${type}` : "");
     el.classList.toggle("hidden", !text);
+    clearTimeout(setHeaderStatus._hideTimer);
+    if (text) {
+      setHeaderStatus._hideTimer = setTimeout(() => {
+        el.textContent = "";
+        el.className = "header-status hidden";
+      }, 4500);
+    }
   }
 
   function normalizeUiLang(lang) {

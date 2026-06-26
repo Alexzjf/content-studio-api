@@ -1,4 +1,4 @@
-const APP_VERSION = "1.41.0";
+const APP_VERSION = "1.42.0";
 
 let chatStatusTicker = null;
 let hostedWarmAt = 0;

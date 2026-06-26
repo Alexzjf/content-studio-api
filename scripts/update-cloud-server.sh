@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Оновити хмарний сервер на Render (ключі + модель + redeploy).
+# Увага: render env-vars PUT замінює ВСІ змінні — скрипт має відправляти повний список (див. python блок нижче).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

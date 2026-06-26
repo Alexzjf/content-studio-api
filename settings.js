@@ -167,6 +167,107 @@
     } catch {
       /* ignore */
     }
+    if (id === "profile") void refreshProfile();
+  }
+
+  function providerLabel(code) {
+    if (code === "x") return t("profileProviderX");
+    if (code === "google") return t("profileProviderGoogle");
+    if (code === "telegram") return t("profileProviderTelegram");
+    if (code === "email") return t("profileProviderEmail");
+    return code || "—";
+  }
+
+  function profileInitials(name) {
+    const parts = String(name || "?")
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
+    if (!parts.length) return "?";
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+  }
+
+  async function refreshProfile() {
+    const profile = (await window.AppAuth?.fetchProfile?.()) || (await window.AppAuth?.getUser?.());
+    if (!profile) return;
+
+    const name = profile.name || "—";
+    const emailText =
+      profile.displayEmail ||
+      profile.email ||
+      (profile.isPlaceholderEmail ? t("profileNoEmail") : profile.recoveryEmailMasked || t("profileNoEmail"));
+
+    if ($("profileName")) $("profileName").textContent = name;
+    if ($("profileEmail")) $("profileEmail").textContent = emailText;
+    if ($("profileAvatar")) $("profileAvatar").textContent = profileInitials(name);
+    if ($("profileProviderBadge")) $("profileProviderBadge").textContent = providerLabel(profile.provider);
+
+    const providers = Array.isArray(profile.providers) ? profile.providers : [];
+    const providerNames = providers.length
+      ? providers.map((p) => providerLabel(p.provider)).join(" · ")
+      : providerLabel(profile.provider);
+    if ($("profileProvidersList")) $("profileProvidersList").textContent = providerNames;
+
+    const needsRecovery =
+      profile.isPlaceholderEmail ||
+      providers.some((p) => p.provider === "x" || p.provider === "telegram");
+    const recoveryBlock = $("profileRecoveryBlock");
+    recoveryBlock?.classList.toggle("hidden", !needsRecovery);
+
+    const linked = $("profileRecoveryLinked");
+    const form = $("profileLinkEmailForm");
+    if (profile.hasRecoveryEmail) {
+      linked?.classList.remove("hidden");
+      form?.classList.add("hidden");
+      if (linked) {
+        linked.textContent = t("profileRecoveryLinked").replace(
+          "{email}",
+          profile.recoveryEmailMasked || profile.recoveryEmail || ""
+        );
+      }
+    } else {
+      linked?.classList.add("hidden");
+      form?.classList.remove("hidden");
+    }
+  }
+
+  function bindProfileActions() {
+    $("profileSignOutBtn")?.addEventListener("click", () => {
+      if (!confirm(t("profileSignOutConfirm"))) return;
+      void window.AppAuth?.signOut?.();
+    });
+
+    $("profileLinkEmailForm")?.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const email = $("profileRecoveryEmail")?.value?.trim();
+      const password = $("profileRecoveryPassword")?.value || "";
+      const errEl = $("profileRecoveryError");
+      const btn = $("profileLinkEmailBtn");
+
+      errEl?.classList.add("hidden");
+      if (!email || password.length < 6) {
+        if (errEl) {
+          errEl.textContent = t("authFillFields");
+          errEl.classList.remove("hidden");
+        }
+        return;
+      }
+
+      btn.disabled = true;
+      try {
+        await window.AppAuth.linkRecoveryEmail(email, password);
+        showStatus(t("profileLinkEmailOk"));
+        await refreshProfile();
+      } catch (err) {
+        if (errEl) {
+          errEl.textContent = err.message || t("authFailed");
+          errEl.classList.remove("hidden");
+        }
+      } finally {
+        btn.disabled = false;
+      }
+    });
   }
 
   function bindNav() {
@@ -280,6 +381,7 @@
     if (!$("appSettingsPage")) return;
     bindNav();
     bindAutosave();
+    bindProfileActions();
     if (location.search.includes("settings=1")) open();
   }
 

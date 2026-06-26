@@ -70,13 +70,20 @@
     await chrome.storage.local.remove(AUTH_STORAGE_KEY);
   }
 
-  async function apiRequest(path, body) {
+  async function apiRequest(path, body, method = "POST") {
     let res;
+    const headers = { Accept: "application/json" };
+    if (body !== undefined) {
+      headers["Content-Type"] = "application/json";
+    }
+    const token = (await getStoredAuth())?.accessToken;
+    if (token) headers.Authorization = `Bearer ${token}`;
+
     try {
       res = await fetch(`${crmApiBase()}${path}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify(body),
+        method,
+        headers,
+        body: body !== undefined ? JSON.stringify(body) : undefined,
       });
     } catch {
       throw new Error("Failed to fetch");
@@ -200,16 +207,18 @@
     gate?.classList.add("hidden");
     gate?.setAttribute("aria-hidden", "true");
     document.body.classList.remove("auth-unlocking");
+    window.AppChrome?.setHeaderStatus?.("", "");
 
     readyResolve?.({ ok: true });
     void applyPreferredViewMode();
   }
 
   async function completeLogin(data, provider = "email") {
+    const user = data.user || {};
     await saveAuth({
       accessToken: data.accessToken,
-      user: data.user,
-      provider,
+      user,
+      provider: user.provider || provider,
       local: data.local === true,
       savedAt: Date.now(),
     });
@@ -290,12 +299,47 @@
     const clientId = globalThis.EXTENSION_CONFIG?.xClientId;
     if (!clientId) throw new Error(t("authProviderNotConfigured"));
 
-    const res = await chrome.runtime.sendMessage({ type: "AUTH_X_OAUTH" });
+    const res = await chrome.runtime.sendMessage({
+      type: "AUTH_X_OAUTH",
+      clientId,
+      clientSecret: globalThis.EXTENSION_CONFIG?.xClientSecret || "",
+    });
     if (res?.error) throw new Error(res.error);
     if (!res?.accessToken) throw new Error(t("authFailed"));
 
     const data = await apiRequest("/auth/social", { provider: "x", accessToken: res.accessToken });
     await completeLogin(data, "x");
+  }
+
+  async function fetchProfile() {
+    const stored = await getStoredAuth();
+    if (!stored?.accessToken) return null;
+    try {
+      const profile = await apiRequest("/auth/me", undefined, "GET");
+      await saveAuth({ ...stored, user: profile, provider: profile.provider || stored.provider });
+      return profile;
+    } catch {
+      return stored.user || null;
+    }
+  }
+
+  async function linkRecoveryEmail(email, password) {
+    const data = await apiRequest("/auth/profile/link-email", { email, password });
+    const stored = await getStoredAuth();
+    const user = data.user || stored?.user;
+    await saveAuth({
+      ...stored,
+      accessToken: data.accessToken || stored?.accessToken,
+      user,
+      provider: user?.provider || stored?.provider,
+      savedAt: Date.now(),
+    });
+    return user;
+  }
+
+  async function getUser() {
+    const stored = await getStoredAuth();
+    return stored?.user || null;
   }
 
   async function tryAutoSession() {
@@ -316,7 +360,7 @@
         return false;
       }
       const user = await res.json();
-      await saveAuth({ ...stored, user });
+      await saveAuth({ ...stored, user, provider: user.provider || stored.provider });
       return true;
     } catch {
       return true;
@@ -404,6 +448,9 @@
     whenReady: () => readyPromise,
     isAuthenticated: async () => !!(await getStoredAuth())?.accessToken,
     getAccessToken,
+    getUser,
+    fetchProfile,
+    linkRecoveryEmail,
     signOut,
     init,
   };

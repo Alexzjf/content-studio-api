@@ -1,25 +1,21 @@
 import { createHash, createHmac, randomBytes, randomUUID, scryptSync, timingSafeEqual } from "crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { dirname, join } from "path";
-import { fileURLToPath } from "url";
+import {
+  buildUserProfile,
+  createUser,
+  findUserById,
+  findUserByLoginEmail,
+  findUserByPrimaryEmail,
+  findUserByProvider,
+  getRecoveryEmail,
+  initDb,
+  isPlaceholderEmail,
+  linkProvider,
+  setRecoveryEmail,
+  updateUserPassword,
+  updateUserPrimaryEmail,
+} from "./db.js";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = join(__dirname, "data");
-const USERS_FILE = join(DATA_DIR, "users.json");
-
-function loadUsers() {
-  if (!existsSync(USERS_FILE)) return [];
-  try {
-    return JSON.parse(readFileSync(USERS_FILE, "utf8"));
-  } catch {
-    return [];
-  }
-}
-
-function saveUsers(users) {
-  if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
-  writeFileSync(USERS_FILE, JSON.stringify(users, null, 2), "utf8");
-}
+initDb();
 
 function hashPassword(password) {
   const salt = randomBytes(16).toString("hex");
@@ -45,8 +41,8 @@ function jwtSecret() {
 function signToken(user) {
   const payload = {
     sub: user.id,
-    email: user.email,
-    name: user.name,
+    email: user.primary_email,
+    name: user.display_name,
     exp: Date.now() + 7 * 24 * 60 * 60 * 1000,
   };
   const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
@@ -54,7 +50,7 @@ function signToken(user) {
   return `${body}.${sig}`;
 }
 
-function verifyToken(token) {
+export function verifyToken(token) {
   if (!token || typeof token !== "string") return null;
   const [body, sig] = token.split(".");
   if (!body || !sig) return null;
@@ -69,31 +65,22 @@ function verifyToken(token) {
   }
 }
 
-function authResponse(user) {
+function authResponse(userRow) {
   return {
-    accessToken: signToken(user),
-    user: { id: user.id, email: user.email, name: user.name },
+    accessToken: signToken(userRow),
+    user: buildUserProfile(userRow),
   };
 }
 
-function findUserByEmail(email) {
-  return loadUsers().find((u) => u.email.toLowerCase() === String(email).toLowerCase());
-}
-
-function createUser({ email, name, passwordHash, provider, providerId }) {
-  const users = loadUsers();
-  const user = {
-    id: randomUUID(),
-    email,
-    name,
-    passwordHash: passwordHash || hashPassword(randomUUID()),
-    provider: provider || "email",
-    providerId: providerId || null,
-    createdAt: new Date().toISOString(),
-  };
-  users.push(user);
-  saveUsers(users);
-  return user;
+function requireAuth(req, res, next) {
+  const auth = req.headers.authorization || "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  const payload = verifyToken(token);
+  if (!payload) return res.status(401).json({ error: "Unauthorized" });
+  const user = findUserById(payload.sub);
+  if (!user) return res.status(401).json({ error: "Unauthorized" });
+  req.authUser = user;
+  next();
 }
 
 async function loginWithGoogle(idToken) {
@@ -150,16 +137,24 @@ async function loginWithX(accessToken) {
 }
 
 function findOrCreateOAuthUser(provider, providerId, email, name) {
-  let user = findUserByEmail(email);
+  let user = findUserByProvider(provider, providerId);
+  if (!user) user = findUserByPrimaryEmail(email);
   if (!user) {
-    user = createUser({ email, name, provider, providerId });
+    user = createUser({
+      displayName: name,
+      primaryEmail: email,
+      passwordHash: hashPassword(randomUUID()),
+      provider,
+      providerAccountId: providerId,
+    });
+  } else {
+    linkProvider(user.id, provider, providerId);
   }
   return authResponse(user);
 }
 
 function telegramWidgetPage(bot, redirectUri) {
   const safeBot = String(bot || "").replace(/[^a-zA-Z0-9_]/g, "");
-  const safeRedirect = String(redirectUri || "").replace(/"/g, "&quot;");
   return `<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="UTF-8" />
@@ -203,30 +198,62 @@ export function mountAuthRoutes(app) {
     res.type("html").send(telegramWidgetPage(bot, redirectUri));
   });
 
-  app.get("/auth/me", (req, res) => {
-    const auth = req.headers.authorization || "";
-    const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-    const payload = verifyToken(token);
-    if (!payload) return res.status(401).json({ error: "Unauthorized" });
-    const user = loadUsers().find((u) => u.id === payload.sub);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
-    res.json({ id: user.id, email: user.email, name: user.name });
+  app.get("/auth/me", requireAuth, (req, res) => {
+    res.json(buildUserProfile(req.authUser));
+  });
+
+  app.post("/auth/profile/link-email", requireAuth, (req, res) => {
+    try {
+      const { email, password } = req.body || {};
+      const cleanEmail = String(email || "").trim().toLowerCase();
+      if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+        return res.status(400).json({ error: "Invalid email" });
+      }
+      if (!password || String(password).length < 6) {
+        return res.status(400).json({ error: "Password must be at least 6 characters" });
+      }
+      if (isPlaceholderEmail(cleanEmail)) {
+        return res.status(400).json({ error: "Use a real email address" });
+      }
+
+      const user = req.authUser;
+      const taken = findUserByLoginEmail(cleanEmail);
+      if (taken && taken.id !== user.id) {
+        return res.status(409).json({ error: "Email already registered" });
+      }
+
+      const passwordHash = hashPassword(password);
+      updateUserPassword(user.id, passwordHash);
+      setRecoveryEmail(user.id, cleanEmail);
+      linkProvider(user.id, "email", null);
+
+      if (isPlaceholderEmail(user.primary_email)) {
+        updateUserPrimaryEmail(user.id, cleanEmail);
+      }
+
+      const updated = findUserById(user.id);
+      res.json(authResponse(updated));
+    } catch (err) {
+      res.status(500).json({ error: err.message || "Could not link email" });
+    }
   });
 
   app.post("/auth/extension-register", (req, res) => {
     try {
       const { name, email, password } = req.body || {};
-      if (!email || !password || String(password).length < 6) {
+      const cleanEmail = String(email || "").trim();
+      if (!cleanEmail || !password || String(password).length < 6) {
         return res.status(400).json({ error: "Invalid registration data" });
       }
-      if (findUserByEmail(email)) {
+      if (findUserByLoginEmail(cleanEmail)) {
         return res.status(401).json({ error: "Email already registered" });
       }
       const user = createUser({
-        email: String(email).trim(),
-        name: String(name || email.split("@")[0] || "User").trim(),
+        displayName: String(name || cleanEmail.split("@")[0] || "User").trim(),
+        primaryEmail: cleanEmail,
         passwordHash: hashPassword(password),
         provider: "email",
+        providerAccountId: null,
       });
       res.json(authResponse(user));
     } catch (err) {
@@ -237,8 +264,8 @@ export function mountAuthRoutes(app) {
   app.post("/auth/login", (req, res) => {
     try {
       const { email, password } = req.body || {};
-      const user = findUserByEmail(email);
-      if (!user || !verifyPassword(password, user.passwordHash)) {
+      const user = findUserByLoginEmail(email);
+      if (!user || !verifyPassword(password, user.password_hash)) {
         return res.status(401).json({ error: "Invalid credentials" });
       }
       res.json(authResponse(user));

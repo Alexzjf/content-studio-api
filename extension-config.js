@@ -26,5 +26,7 @@ var EXTENSION_CONFIG = {
     _authLocal.googleClientId ||
     "885065993868-0fpub31tvtk0d7q6s58559upkljun8e7.apps.googleusercontent.com",
   telegramBotUsername: _authLocal.telegramBotUsername || "",
-  xClientId: _authLocal.xClientId || "",
+  xClientId:
+    _authLocal.xClientId || "cGxUOE9nTElreUN5Y2VhOVhuX2M6MTpjaQ",
+  xClientSecret: _authLocal.xClientSecret || "",
 };
