@@ -9,6 +9,7 @@ import {
   findUserByPrimaryEmail,
   findUserByProvider,
   getRecoveryEmail,
+  getTelegramProviderId,
   initDb,
   isPlaceholderEmail,
   linkProvider,
@@ -163,7 +164,7 @@ async function loginWithTelegram(auth) {
   if (computed !== hash) throw new Error("Telegram auth verification failed");
 
   const authDate = Number(auth.auth_date || 0);
-  if (!authDate || Date.now() / 1000 - authDate > 86400) {
+  if (!authDate || Date.now() / 1000 - authDate > 600) {
     throw new Error("Telegram auth expired");
   }
 
@@ -214,6 +215,53 @@ function normalizeBotUsername(bot) {
     .trim()
     .replace(/^@/, "")
     .replace(/[^a-zA-Z0-9_]/g, "");
+}
+
+function telegramApiOrigin() {
+  return (process.env.PUBLIC_API_URL || "https://content-studio-api-1.onrender.com").replace(/\/$/, "");
+}
+
+function telegramBotId() {
+  return String(process.env.TELEGRAM_BOT_ID || "8348476052");
+}
+
+function buildTelegramOAuthUrls(redirectUri, lang = "en") {
+  const botId = telegramBotId();
+  const origin = telegramApiOrigin();
+  const safeLang = String(lang || "en")
+    .toLowerCase()
+    .replace(/[^a-z]/g, "")
+    .slice(0, 2) || "en";
+  const callback = `${origin}/auth/telegram/callback?redirect_uri=${encodeURIComponent(redirectUri)}`;
+  const oauthAuthUrl = `https://oauth.telegram.org/auth?bot_id=${botId}&origin=${encodeURIComponent(origin)}&embed=1&lang=${safeLang}&return_to=${encodeURIComponent(callback)}`;
+  const logoutUrl = `https://oauth.telegram.org/auth/logout?bot_id=${botId}&origin=${encodeURIComponent(origin)}&return_to=${encodeURIComponent(oauthAuthUrl)}`;
+  return { logoutUrl, oauthAuthUrl };
+}
+
+function telegramCallbackPage(redirectUri) {
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8" /><title>Telegram</title></head>
+<body>
+<script>
+(function () {
+  var redirect = ${JSON.stringify(redirectUri || "")};
+  if (!redirect) return;
+  var params = new URLSearchParams((location.hash || "").replace(/^#/, ""));
+  if (!params.get("hash")) {
+    params = new URLSearchParams(location.search);
+  }
+  var data = {};
+  params.forEach(function (value, key) { data[key] = value; });
+  if (!data.hash) {
+    document.body.textContent = "Telegram sign-in cancelled.";
+    return;
+  }
+  var url = new URL(redirect);
+  url.searchParams.set("payload", encodeURIComponent(JSON.stringify(data)));
+  location.replace(url.toString());
+})();
+</script>
+</body></html>`;
 }
 
 function telegramWidgetPage(bot, redirectUri, lang = "en") {
@@ -297,6 +345,30 @@ export async function ensureTelegramWebhook() {
 }
 
 export function mountAuthRoutes(app) {
+  app.get("/auth/telegram/start", (req, res) => {
+    const redirectUri = req.query.redirect_uri;
+    const lang = req.query.lang || "en";
+    if (!redirectUri) {
+      return res.status(400).send("redirect_uri required");
+    }
+    const { logoutUrl } = buildTelegramOAuthUrls(redirectUri, lang);
+    res.redirect(logoutUrl);
+  });
+
+  app.get("/auth/telegram/callback", (req, res) => {
+    const redirectUri = req.query.redirect_uri;
+    if (!redirectUri) {
+      return res.status(400).send("redirect_uri required");
+    }
+    res.type("html").send(telegramCallbackPage(redirectUri));
+  });
+
+  app.post("/auth/telegram/disconnect", requireAuth, (req, res) => {
+    const tgId = getTelegramProviderId(req.authUser.id);
+    if (tgId) revokeTelegramConnection(tgId);
+    res.json({ ok: true });
+  });
+
   app.get("/auth/telegram/page", (req, res) => {
     const bot = normalizeBotUsername(req.query.bot);
     const redirectUri = req.query.redirect_uri;

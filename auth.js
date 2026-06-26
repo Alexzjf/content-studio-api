@@ -313,8 +313,7 @@
 
     const apiBase = crmApiBase();
     const redirect = chrome.identity.getRedirectURL("telegram");
-    const lang = "en";
-    const popupUrl = `${apiBase}/auth/telegram/page?bot=${encodeURIComponent(bot)}&redirect_uri=${encodeURIComponent(redirect)}&lang=${encodeURIComponent(lang)}`;
+    const popupUrl = `${apiBase}/auth/telegram/start?redirect_uri=${encodeURIComponent(redirect)}&lang=en&fresh=${Date.now()}`;
 
     const responseUrl = await new Promise((resolve, reject) => {
       chrome.identity.launchWebAuthFlow({ url: popupUrl, interactive: true }, (url) => {
@@ -501,6 +500,25 @@
   }
 
   async function forceLogout() {
+    const stored = await getStoredAuth();
+    const isTelegram =
+      stored?.provider === "telegram" ||
+      stored?.user?.providers?.some?.((p) => p.provider === "telegram");
+
+    if (isTelegram && stored?.accessToken) {
+      try {
+        await fetch(`${crmApiBase()}/auth/telegram/disconnect`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${stored.accessToken}`,
+            Accept: "application/json",
+          },
+        });
+      } catch {
+        /* ignore */
+      }
+    }
+
     try {
       await new Promise((resolve) => {
         chrome.identity.getAuthToken({ interactive: false }, (token) => {
