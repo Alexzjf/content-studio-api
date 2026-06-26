@@ -4,3 +4,5 @@ server/.env
 server/keys.txt
 server/.env.keys
 server/node_modules/
+server/data/
+auth-config.local.js

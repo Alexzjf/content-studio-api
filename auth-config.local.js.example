@@ -1,0 +1,26 @@
+/**
+ * Скопіюй як auth-config.local.js і заповни значення.
+ * Файл auth-config.local.js не комітиться в git.
+ *
+ * ── Google ─────────────────────────────────────────────────────
+ * 1. https://console.cloud.google.com/apis/credentials
+ * 2. Create OAuth Client → Application type: Chrome Extension
+ * 3. Item ID = ID розширення з chrome://extensions
+ * 4. Встав googleClientId сюди
+ *
+ * ── Telegram ───────────────────────────────────────────────────
+ * 1. @BotFather → /newbot → збережи токен у server/.env як TELEGRAM_BOT_TOKEN
+ * 2. /setdomain → домен хмарного API (напр. content-studio-api-1.onrender.com)
+ * 3. telegramBotUsername = ім'я бота без @
+ *
+ * ── X (Twitter) ──────────────────────────────────────────────
+ * 1. https://developer.x.com → Project → User authentication
+ * 2. Type: Web App, OAuth 2.0, PKCE
+ * 3. Callback URL = відкрий oauth-setup.html у розширенні, скопіюй X redirect
+ * 4. xClientId сюди
+ */
+var AUTH_LOCAL = {
+  googleClientId: "",
+  telegramBotUsername: "",
+  xClientId: "",
+};

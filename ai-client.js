@@ -182,6 +182,9 @@ ${formatSourcesBlock(sources, "post")}`;
 }
 
 function buildSystemPrompt(sources, settings) {
+  if (settings.commentMode && globalThis.CommentPrompt?.buildCommentSystemPrompt) {
+    return globalThis.CommentPrompt.buildCommentSystemPrompt(sources, settings);
+  }
   if (!hasSourceContent(sources)) {
     return buildGeneralChatPrompt(settings);
   }

@@ -1,4 +1,12 @@
-importScripts("extension-config.js", "panel-config.js", "prompt-hints.js", "ai-providers.js", "ai-client.js");
+importScripts(
+  "extension-config.js",
+  "panel-config.js",
+  "prompt-hints.js",
+  "comment-prompt.js",
+  "audio-store.js",
+  "ai-providers.js",
+  "ai-client.js"
+);
 
 const OFFSCREEN_URL = "offscreen.html";
 const APP_PATH = "app.html";
@@ -21,11 +29,18 @@ function withServiceWorkerKeepAlive(work) {
   return Promise.resolve(work()).finally(() => clearInterval(id));
 }
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.target === "offscreen") return false;
 
   if (message.type === "WAKE_WORKER") {
     sendResponse({ ok: true });
+    return true;
+  }
+
+  if (message.type === "AUTH_X_OAUTH") {
+    authXOAuth()
+      .then(sendResponse)
+      .catch((err) => sendResponse({ error: err.message }));
     return true;
   }
 
@@ -44,8 +59,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === "OPEN_FULLSCREEN_TAB") {
+    const opts = {
+      url: chrome.runtime.getURL("app.html?fullscreen=1"),
+      active: true,
+    };
+    if (message.windowId) opts.windowId = message.windowId;
     chrome.tabs
-      .create({ url: chrome.runtime.getURL("app.html?fullscreen=1"), active: true })
+      .create(opts)
       .then(() => sendResponse({ ok: true }))
       .catch((err) => sendResponse({ error: err.message }));
     return true;
@@ -67,7 +87,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === "OPEN_DOCK_PANEL" || message.type === "OPEN_SIDE_PANEL") {
-    openInpagePanel(message.widthPercent ?? 25, message.browserWindowId)
+    openInpagePanel(message.widthPercent ?? 25, message.browserWindowId, message.tabId)
       .then(sendResponse)
       .catch((err) => sendResponse({ error: err.message }));
     return true;
@@ -81,7 +101,32 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === "TRANSCRIBE") {
-    withServiceWorkerKeepAlive(() => handleTranscribe(message.audioId, message.language))
+    withServiceWorkerKeepAlive(async () => {
+      let language = message.language;
+      if (!language) {
+        const stored = await chrome.storage.local.get("settings");
+        language = stored.settings?.whisperLang || "auto";
+      }
+      return handleTranscribe(message.audioId, language);
+    })
+      .then(sendResponse)
+      .catch((err) => sendResponse({ error: err.message }));
+    return true;
+  }
+
+  if (message.type === "PUT_AUDIO_TRANSCRIBE") {
+    withServiceWorkerKeepAlive(async () => {
+      const samples = message.audio;
+      if (!samples?.length) {
+        throw new Error("Missing audio data");
+      }
+      const stored = await chrome.storage.local.get("settings");
+      const language = message.language || stored.settings?.whisperLang || "auto";
+      const audioId = await AudioStore.put(
+        samples instanceof Float32Array ? samples : new Float32Array(samples)
+      );
+      return handleTranscribe(audioId, language);
+    })
       .then(sendResponse)
       .catch((err) => sendResponse({ error: err.message }));
     return true;
@@ -112,13 +157,52 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === "GENERATE_COMMENT") {
+    withServiceWorkerKeepAlive(async () => {
+      const stored = await chrome.storage.local.get("settings");
+      const base = stored.settings || {};
+      const settings = { ...base, commentMode: true, chatMode: "qa" };
+      const chatFn = globalThis.chatWithSources;
+      if (typeof chatFn !== "function") {
+        throw new Error("AI модуль у background не завантажився. Reload розширення.");
+      }
+      const userMsg =
+        globalThis.CommentPrompt?.buildCommentUserMessage?.(message.context || {}) ||
+        "Write a reply comment to this X post. Return only the comment.";
+      const history = [{ role: "user", content: userMsg }];
+      const raw = await chatFn(message.sources || [], settings, history);
+      const text = globalThis.CommentPrompt?.extractCommentText?.(raw, settings) || String(raw || "").trim();
+      return { text };
+    })
+      .then(sendResponse)
+      .catch((err) => sendResponse({ error: err.message }));
+    return true;
+  }
+
+  if (message.type === "FILL_X_COMPOSER") {
+    const tabId = sender.tab?.id;
+    if (!tabId) {
+      sendResponse({ ok: false, error: "No active tab" });
+      return true;
+    }
+    fillXComposerInTab(tabId, message.text || "")
+      .then(sendResponse)
+      .catch((err) => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+
   if (message.type === "DESCRIBE_IMAGE") {
     withServiceWorkerKeepAlive(async () => {
       const describeFn = globalThis.describeImage;
       if (typeof describeFn !== "function") {
         throw new Error("AI модуль у background не завантажився.");
       }
-      const text = await describeFn(message.imageBase64, message.settings || {});
+      let settings = message.settings;
+      if (!settings || !Object.keys(settings).length) {
+        const stored = await chrome.storage.local.get("settings");
+        settings = stored.settings || {};
+      }
+      const text = await describeFn(message.imageBase64, settings);
       return { text };
     })
       .then(sendResponse)
@@ -222,7 +306,33 @@ function dockGeometry(browserWin, widthPercent) {
 async function getActiveTabId(preferredTabId) {
   const tabId = await pickPanelTargetTab(preferredTabId);
   if (tabId) return tabId;
-  throw new Error("Відкрийте звичайну вкладку Chrome (YouTube, X тощо)");
+  return openDefaultPanelTab();
+}
+
+async function waitForTabReady(tabId, timeoutMs = 12000) {
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (tab?.status === "complete") return;
+
+  await new Promise((resolve) => {
+    const timer = setTimeout(resolve, timeoutMs);
+    const onUpdated = (id, info) => {
+      if (id === tabId && info.status === "complete") {
+        clearTimeout(timer);
+        chrome.tabs.onUpdated.removeListener(onUpdated);
+        resolve();
+      }
+    };
+    chrome.tabs.onUpdated.addListener(onUpdated);
+  });
+}
+
+async function openDefaultPanelTab() {
+  const tab = await chrome.tabs.create({ url: "https://x.com", active: true });
+  if (!tab?.id) {
+    throw new Error("Відкрийте звичайну вкладку Chrome (YouTube, X тощо)");
+  }
+  await waitForTabReady(tab.id);
+  return tab.id;
 }
 
 async function ensurePagePanelScript(tabId) {
@@ -256,6 +366,19 @@ function tabsSendMessage(tabId, message) {
   });
 }
 
+async function focusPanelTab(tabId) {
+  if (!tabId) return;
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (tab.windowId) {
+      await chrome.windows.update(tab.windowId, { focused: true });
+    }
+    await chrome.tabs.update(tabId, { active: true });
+  } catch (_) {
+    /* ignore */
+  }
+}
+
 async function relayToActiveTab(message) {
   const tabId = await getActiveTabId(message.tabId);
   await closeLegacyDockWindows();
@@ -264,6 +387,7 @@ async function relayToActiveTab(message) {
   if (response?.error) throw new Error(response.error);
   if (message.type === "OPEN_INPAGE_PANEL" && response?.ok) {
     await savePanelWidth(message.widthPercent ?? 25);
+    await focusPanelTab(tabId);
   }
   if (message.type === "RESIZE_INPAGE_PANEL" && response?.ok) {
     await savePanelWidth(message.widthPercent ?? 25);
@@ -271,8 +395,8 @@ async function relayToActiveTab(message) {
   return response;
 }
 
-async function openInpagePanel(widthPercent = 25, _browserWindowId) {
-  return relayToActiveTab({ type: "OPEN_INPAGE_PANEL", widthPercent });
+async function openInpagePanel(widthPercent = 25, _browserWindowId, preferredTabId) {
+  return relayToActiveTab({ type: "OPEN_INPAGE_PANEL", widthPercent, tabId: preferredTabId });
 }
 
 async function resizeInpagePanel(widthPercent = 25, tabId) {
@@ -354,6 +478,38 @@ async function getCenteredWindowBounds() {
   };
 }
 
+async function fillXComposerInTab(tabId, text) {
+  const probe = await chrome.scripting
+    .executeScript({
+      target: { tabId },
+      world: "MAIN",
+      func: () => typeof window.__csxFillXComposer === "function",
+    })
+    .catch(() => null);
+
+  if (!probe?.[0]?.result) {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["x-page-fill.js"],
+      world: "MAIN",
+    });
+  }
+
+  const [{ result }] = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: async (value) => {
+      if (typeof window.__csxFillXComposer !== "function") {
+        return { ok: false, error: "fill module missing" };
+      }
+      return window.__csxFillXComposer(value);
+    },
+    args: [text],
+  });
+
+  return result || { ok: false, error: "empty result" };
+}
+
 async function handleTranscribe(audioId, language) {
   if (!audioId) {
     return { error: "Missing audio data" };
@@ -407,4 +563,73 @@ async function ensureOffscreenDocument() {
     reasons: ["WORKERS"],
     justification: "Run local Whisper speech-to-text model",
   });
+}
+
+function randomVerifier(length = 64) {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
+  const bytes = new Uint8Array(length);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => chars[b % chars.length]).join("");
+}
+
+async function pkceChallenge(verifier) {
+  const data = new TextEncoder().encode(verifier);
+  const digest = await crypto.subtle.digest("SHA-256", data);
+  const bytes = new Uint8Array(digest);
+  let binary = "";
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+async function authXOAuth() {
+  const clientId = globalThis.EXTENSION_CONFIG?.xClientId;
+  if (!clientId) throw new Error("X OAuth not configured");
+
+  const redirectUrl = chrome.identity.getRedirectURL("x");
+  const verifier = randomVerifier();
+  const challenge = await pkceChallenge(verifier);
+  const state = crypto.randomUUID();
+
+  const authUrl = new URL("https://twitter.com/i/oauth2/authorize");
+  authUrl.searchParams.set("response_type", "code");
+  authUrl.searchParams.set("client_id", clientId);
+  authUrl.searchParams.set("redirect_uri", redirectUrl);
+  authUrl.searchParams.set("scope", "tweet.read users.read offline.access");
+  authUrl.searchParams.set("state", state);
+  authUrl.searchParams.set("code_challenge", challenge);
+  authUrl.searchParams.set("code_challenge_method", "S256");
+
+  const responseUrl = await new Promise((resolve, reject) => {
+    chrome.identity.launchWebAuthFlow({ url: authUrl.toString(), interactive: true }, (url) => {
+      if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+      else if (!url) reject(new Error("Auth cancelled"));
+      else resolve(url);
+    });
+  });
+
+  const parsed = new URL(responseUrl);
+  if (parsed.searchParams.get("state") !== state) {
+    throw new Error("Invalid OAuth state");
+  }
+  const code = parsed.searchParams.get("code");
+  if (!code) throw new Error("Missing OAuth code");
+
+  const tokenRes = await fetch("https://api.twitter.com/2/oauth2/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      code,
+      grant_type: "authorization_code",
+      client_id: clientId,
+      redirect_uri: redirectUrl,
+      code_verifier: verifier,
+    }),
+  });
+
+  const tokenData = await tokenRes.json().catch(() => ({}));
+  if (!tokenRes.ok) {
+    throw new Error(tokenData.error_description || tokenData.error || "X token exchange failed");
+  }
+
+  return { accessToken: tokenData.access_token };
 }

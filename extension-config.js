@@ -9,6 +9,10 @@
 //
 // localDevFallback: true — лише для розробки (пробує localhost:8787 якщо хмара зайнята)
 //
+// Локальні OAuth ключі — скопіюй auth-config.local.js.example → auth-config.local.js
+// (підключається в app.html перед цим файлом)
+var _authLocal = typeof AUTH_LOCAL !== "undefined" ? AUTH_LOCAL : {};
+
 var EXTENSION_CONFIG = {
   hostedApiUrl: "https://content-studio-api-1.onrender.com",
   localDevFallback: false,
@@ -17,4 +21,10 @@ var EXTENSION_CONFIG = {
   panelWidthDefault: 25,
   standaloneWindowWidth: 1040,
   standaloneWindowHeight: 700,
+  crmApiUrl: "",
+  googleClientId:
+    _authLocal.googleClientId ||
+    "885065993868-0fpub31tvtk0d7q6s58559upkljun8e7.apps.googleusercontent.com",
+  telegramBotUsername: _authLocal.telegramBotUsername || "",
+  xClientId: _authLocal.xClientId || "",
 };

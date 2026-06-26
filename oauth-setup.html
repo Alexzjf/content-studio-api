@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OAuth setup — cheatXtwitter</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #0c0c0e; color: #eee; margin: 0; padding: 24px; line-height: 1.5; }
+    h1 { font-size: 20px; }
+    .card { background: #16161a; border: 1px solid #2a2a30; border-radius: 12px; padding: 16px; margin: 16px 0; }
+    code, pre { background: #0a0a0c; padding: 2px 6px; border-radius: 6px; font-size: 13px; word-break: break-all; }
+    pre { padding: 12px; overflow-x: auto; }
+    button { margin-top: 8px; padding: 8px 12px; border-radius: 8px; border: 1px solid #444; background: #222; color: #fff; cursor: pointer; }
+    button:hover { background: #333; }
+    .label { color: #9ca3af; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+  </style>
+</head>
+<body>
+  <h1>OAuth — cheatXtwitter</h1>
+  <p>Скопіюй ці значення в Google Cloud, X Developer Portal і BotFather.</p>
+
+  <div class="card">
+    <div class="label">Extension ID</div>
+    <pre id="extId">…</pre>
+    <button type="button" data-copy="extId">Copy</button>
+  </div>
+
+  <div class="card">
+    <div class="label">Google redirect (авто для Chrome Extension)</div>
+    <pre id="googleRedirect">…</pre>
+    <button type="button" data-copy="googleRedirect">Copy</button>
+  </div>
+
+  <div class="card">
+    <div class="label">X (Twitter) OAuth 2.0 Callback URL</div>
+    <pre id="xRedirect">…</pre>
+    <button type="button" data-copy="xRedirect">Copy</button>
+  </div>
+
+  <div class="card">
+    <div class="label">Telegram Login domain (BotFather → /setdomain)</div>
+    <pre id="tgDomain">content-studio-api-1.onrender.com</pre>
+    <button type="button" data-copy="tgDomain">Copy</button>
+    <p style="color:#9ca3af;font-size:13px">Локально: <code>localhost:8787</code> (тільки для dev)</p>
+  </div>
+
+  <div class="card">
+    <div class="label">auth-config.local.js</div>
+    <pre id="configSnippet">…</pre>
+    <button type="button" data-copy="configSnippet">Copy</button>
+  </div>
+
+  <script src="extension-config.js"></script>
+  <script>
+    const extId = chrome.runtime.id;
+    const googleRedirect = chrome.identity.getRedirectURL();
+    const xRedirect = chrome.identity.getRedirectURL("x");
+    const tgRedirect = chrome.identity.getRedirectURL("telegram");
+    const hosted = (globalThis.EXTENSION_CONFIG?.hostedApiUrl || "https://content-studio-api-1.onrender.com").replace(/^https?:\/\//, "").replace(/\/$/, "");
+
+    document.getElementById("extId").textContent = extId;
+    document.getElementById("googleRedirect").textContent = googleRedirect;
+    document.getElementById("xRedirect").textContent = xRedirect;
+    document.getElementById("tgDomain").textContent = hosted;
+
+    document.getElementById("configSnippet").textContent =
+`var AUTH_LOCAL = {
+  googleClientId: "PASTE_GOOGLE_CLIENT_ID.apps.googleusercontent.com",
+  telegramBotUsername: "your_bot_name",
+  xClientId: "PASTE_X_CLIENT_ID",
+};`;
+
+    document.querySelectorAll("[data-copy]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = btn.getAttribute("data-copy");
+        const text = document.getElementById(id).textContent;
+        navigator.clipboard.writeText(text).then(() => {
+          btn.textContent = "Copied ✓";
+          setTimeout(() => { btn.textContent = "Copy"; }, 1500);
+        });
+      });
+    });
+  </script>
+</body>
+</html>

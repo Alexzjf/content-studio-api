@@ -1,4 +1,4 @@
-const APP_VERSION = "1.34.8";
+const APP_VERSION = "1.41.0";
 
 let chatStatusTicker = null;
 let hostedWarmAt = 0;
@@ -42,6 +42,16 @@ const DEFAULT_SETTINGS = {
   temperature: 0.85,
   customInstructions: "",
   panelWidthPercent: 25,
+  commentModeEnabled: true,
+  commentLang: "auto",
+  commentMinLen: 50,
+  commentMaxLen: 280,
+  commentStyle: "sharp",
+  commentEmoji: "light",
+  commentAnalyzeVideo: true,
+  commentAnalyzeImages: true,
+  commentEndWithQuestion: false,
+  commentCustomInstructions: "",
 };
 
 /** @type {{ id: string, type: string, name: string, content: string, status: string }[]} */
@@ -652,9 +662,17 @@ const SETTINGS_SELECT_IDS = [
 ];
 
 if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", () => void bootApp());
+  document.addEventListener("DOMContentLoaded", () => {
+    void (async () => {
+      await window.AppAuth?.whenReady?.();
+      void bootApp();
+    })();
+  });
 } else {
-  void bootApp();
+  void (async () => {
+    await window.AppAuth?.whenReady?.();
+    void bootApp();
+  })();
 }
 
 window.onLocaleApplied = () => {
@@ -748,7 +766,7 @@ async function setUiLang(lang, persist = true) {
 }
 
 function updateSettingsVersion() {
-  const el = $("settingsVersion");
+  const el = $("appSettingsVersion") || $("settingsVersion");
   if (el) el.textContent = `v${APP_VERSION}`;
   const winVer = $("windowVersion");
   if (winVer) winVer.textContent = `v${APP_VERSION}`;
@@ -799,6 +817,7 @@ async function loadSettings() {
   if (ownModelsCache.cursor === "composer-2") ownModelsCache.cursor = "composer-2.5";
 
   setSelectValue("whisperLang", settings.whisperLang ?? DEFAULT_SETTINGS.whisperLang);
+  setSelectValue("settingsUiLang", uiLang);
   setSelectValue(
     "postLang",
     settings.postLang ?? (uiLang === "uk" ? "uk" : DEFAULT_SETTINGS.postLang)
@@ -827,6 +846,8 @@ async function loadSettings() {
 
   updateAiProviderUI();
 }
+
+globalThis.loadAppSettings = loadSettings;
 
 function migrateAiSettings(settings) {
   const s = { ...settings };

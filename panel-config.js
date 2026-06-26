@@ -44,6 +44,22 @@ async function pickPanelTargetTab(preferredTabId) {
     } catch (_) {}
   }
 
+  let focusedWindowId = null;
+  try {
+    const win = await chrome.windows.getLastFocused({ windowTypes: ["normal"] });
+    focusedWindowId = win?.id ?? null;
+    if (focusedWindowId) {
+      const inWin = await chrome.tabs.query({ windowId: focusedWindowId });
+      const activeAllowed = inWin.find((t) => t.active && t.id && isPanelAllowedUrl(t.url));
+      if (activeAllowed?.id) return activeAllowed.id;
+
+      const anyInWin = inWin
+        .filter((t) => t.id && isPanelAllowedUrl(t.url))
+        .sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0));
+      if (anyInWin[0]?.id) return anyInWin[0].id;
+    }
+  } catch (_) {}
+
   const tabs = await chrome.tabs.query({ windowType: "normal" });
   const allowed = tabs
     .filter((t) => t.id && isPanelAllowedUrl(t.url))

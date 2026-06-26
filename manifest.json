@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "__MSG_extensionName__",
-  "version": "1.34.8",
+  "version": "1.41.0",
   "description": "__MSG_extensionDescription__",
   "default_locale": "en",
   "icons": {
@@ -10,8 +10,10 @@
     "48": "assets/icons/icon-48.png",
     "128": "assets/icons/icon-128.png"
   },
-  "permissions": ["storage", "activeTab", "offscreen", "scripting", "windows", "tabs", "sidePanel", "system.display"],
+  "permissions": ["storage", "activeTab", "offscreen", "scripting", "windows", "tabs", "sidePanel", "system.display", "identity"],
   "host_permissions": [
+    "http://localhost:3001/*",
+    "http://127.0.0.1:3001/*",
     "https://content-studio-api-1.onrender.com/*",
     "https://content-studio-api.onrender.com/*",
     "https://*.onrender.com/*",
@@ -23,6 +25,9 @@
     "http://127.0.0.1:11434/*",
     "https://x.com/*",
     "https://twitter.com/*",
+    "https://api.twitter.com/*",
+    "https://video.twimg.com/*",
+    "https://pbs.twimg.com/*",
     "https://huggingface.co/*",
     "https://cdn-lfs.huggingface.co/*",
     "https://generativelanguage.googleapis.com/*",
@@ -52,7 +57,8 @@
   "content_scripts": [
     {
       "matches": ["https://x.com/*", "https://twitter.com/*"],
-      "js": ["content.js", "page-panel.js"],
+      "js": ["audio-extract.js", "content.js", "x-comment.js", "page-panel.js"],
+      "css": ["x-comment.css"],
       "run_at": "document_idle"
     },
     {
@@ -67,7 +73,17 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["offscreen.html", "app.html", "page-panel.js", "audio-store.js", "wasm/*"],
+      "resources": [
+        "offscreen.html",
+        "app.html",
+        "auth-telegram.html",
+        "oauth-setup.html",
+        "auth-config.local.js",
+        "page-panel.js",
+        "audio-store.js",
+        "x-page-fill.js",
+        "wasm/*"
+      ],
       "matches": ["<all_urls>"]
     }
   ],

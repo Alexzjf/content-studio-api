@@ -28,6 +28,7 @@
     if (q.includes("fullscreen=1")) return "fullscreen";
     if (q.includes("window=1")) return "standalone";
     if (q.includes("side=1")) return "side";
+    if (q.includes("settings=1")) return "settings";
     if (q.includes("dock=1")) return "dock";
     return "toolbar";
   }
@@ -96,6 +97,11 @@
     if (surfaceMode === "dock") {
       document.body.classList.add("mode-dock-panel", "layout-wide");
       document.documentElement.classList.add("mode-dock-panel");
+      return;
+    }
+    if (surfaceMode === "settings") {
+      document.body.classList.add("mode-settings-page", "layout-wide");
+      document.documentElement.classList.add("mode-settings-page");
       return;
     }
     document.body.classList.add("mode-toolbar-popup");
@@ -168,19 +174,14 @@
   }
 
   function openAppSettingsDialog() {
-    populateAppSettingsLangSelect();
-    syncAppSettingsLang(window.__uiLang || "en");
-    const dlg = $("appSettingsDialog");
-    if (!dlg) return;
-    if (typeof dlg.showModal === "function") dlg.showModal();
-    else dlg.setAttribute("open", "");
+    if (window.AppSettings?.open) {
+      window.AppSettings.open();
+      return;
+    }
   }
 
   function closeAppSettingsDialog() {
-    const dlg = $("appSettingsDialog");
-    if (!dlg) return;
-    if (typeof dlg.close === "function") dlg.close();
-    else dlg.removeAttribute("open");
+    window.AppSettings?.close?.();
   }
 
   function updateSliderUi(pct) {
@@ -269,12 +270,34 @@
 
   async function captureTargetTab() {
     try {
+      const win = await chrome.windows.getLastFocused({ windowTypes: ["normal"] });
+      if (win?.id) {
+        const [active] = await chrome.tabs.query({ active: true, windowId: win.id });
+        if (active?.id) {
+          window.__targetTabId = active.id;
+          await chrome.storage.session.set({ popupTargetTabId: active.id });
+          return;
+        }
+      }
       const tabId = await getTargetTabId();
       if (!tabId) return;
       window.__targetTabId = tabId;
       await chrome.storage.session.set({ popupTargetTabId: tabId });
     } catch (err) {
       console.warn("captureTargetTab:", err);
+    }
+  }
+
+  async function focusPanelTab(tabId) {
+    if (!tabId) return;
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      if (tab.windowId) {
+        await chrome.windows.update(tab.windowId, { focused: true });
+      }
+      await chrome.tabs.update(tabId, { active: true });
+    } catch (_) {
+      /* ignore */
     }
   }
 
@@ -381,33 +404,34 @@
     await persistPanelWidth(pct);
     const tabId = await resolveTargetTabId();
 
-    if (!tabId) {
-      setHeaderStatus(t("openPanelNoTab"), "error");
-      return;
-    }
+    const res = await new Promise((resolve) => {
+      chrome.runtime.sendMessage(
+        { type: "OPEN_DOCK_PANEL", widthPercent: pct, tabId },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            resolve({ error: chrome.runtime.lastError.message });
+            return;
+          }
+          resolve(response || {});
+        }
+      );
+    });
 
-    try {
-      await ensurePanelScript(tabId);
-    } catch (err) {
-      setHeaderStatus(err?.message || String(err), "error");
-      return;
-    }
-
-    const res = await tabsSendMessage(tabId, { type: "OPEN_INPAGE_PANEL", widthPercent: pct });
-    if (res?.error) {
+    if (res.error) {
       setHeaderStatus(res.error, "error");
-      return;
+      return false;
     }
-    if (!res?.ok) {
+    if (!res.ok) {
       setHeaderStatus(t("openPanelNoTab"), "error");
-      return;
+      return false;
     }
 
     await persistPanelWidth(pct);
     setHeaderStatus(t("dockOpened"), "success");
     if (isToolbarPopup()) {
-      setTimeout(() => window.close(), 450);
+      setTimeout(() => window.close(), 550);
     }
+    return true;
   }
 
   async function closeCurrentSurface() {
@@ -456,34 +480,58 @@
     }
 
     await persistPanelWidth(pct);
+    await focusPanelTab(tabId);
     setHeaderStatus(t("dockOpened"), "success");
-    setTimeout(() => void closeCurrentSurface(), 280);
+    setTimeout(() => void closeCurrentSurface(), 380);
   }
 
   async function openStandaloneWindow() {
     setViewModeActive("window");
     setHeaderStatus(t("openingWindow"));
-    const bounds = await getCenteredWindowBounds();
-    chrome.windows.create(
-      {
-        url: chrome.runtime.getURL("app.html?window=1"),
-        type: "normal",
-        focused: true,
-        ...bounds,
-      },
-      () => {
-        if (chrome.runtime.lastError) {
-          setHeaderStatus(chrome.runtime.lastError.message, "error");
-          return;
-        }
-        setHeaderStatus(t("windowOpened"), "success");
-        if (isEmbedPanel()) {
-          window.parent.postMessage({ type: "CSX_CLOSE" }, "*");
-        } else if (isToolbarPopup()) {
-          setTimeout(() => window.close(), 300);
-        }
+
+    const fromEmbed = isEmbedPanel();
+    const fromPopup = isToolbarPopup();
+
+    if (fromPopup || fromEmbed) {
+      const res = await new Promise((resolve) => {
+        chrome.runtime.sendMessage({ type: "OPEN_STANDALONE_WINDOW" }, (response) => {
+          if (chrome.runtime.lastError) resolve({ error: chrome.runtime.lastError.message });
+          else resolve(response || {});
+        });
+      });
+      if (res.error) {
+        setHeaderStatus(res.error, "error");
+        return false;
       }
-    );
+      setHeaderStatus(t("windowOpened"), "success");
+      if (fromEmbed) window.parent.postMessage({ type: "CSX_CLOSE" }, "*");
+      else if (fromPopup) setTimeout(() => window.close(), 300);
+      return true;
+    }
+
+    const bounds = await getCenteredWindowBounds();
+    return new Promise((resolve) => {
+      chrome.windows.create(
+        {
+          url: chrome.runtime.getURL("app.html?window=1"),
+          type: "normal",
+          focused: true,
+          ...bounds,
+        },
+        () => {
+          if (chrome.runtime.lastError) {
+            setHeaderStatus(chrome.runtime.lastError.message, "error");
+            resolve(false);
+            return;
+          }
+          setHeaderStatus(t("windowOpened"), "success");
+          if (isEmbedPanel()) {
+            window.parent.postMessage({ type: "CSX_CLOSE" }, "*");
+          }
+          resolve(true);
+        }
+      );
+    });
   }
 
   async function openFullscreenTab() {
@@ -493,10 +541,9 @@
     const fromStandalone = isStandaloneWindow();
     const fromEmbed = isEmbedPanel();
     const fromPopup = isToolbarPopup();
-    let winId = null;
 
     if (fromStandalone) {
-      winId = await getBrowserWindowIdForNewTab();
+      const winId = await getBrowserWindowIdForNewTab();
       if (!winId) {
         try {
           const current = await chrome.windows.getCurrent();
@@ -504,29 +551,54 @@
         } catch (_) {}
         window.location.replace(chrome.runtime.getURL("app.html?fullscreen=1"));
         setHeaderStatus(t("fullscreenOpened"), "success");
-        return;
+        return true;
       }
+    }
+
+    let windowId = null;
+    if (fromStandalone) {
+      windowId = await getBrowserWindowIdForNewTab();
+    } else if (fromEmbed || fromPopup) {
+      try {
+        const win = await chrome.windows.getLastFocused({ windowTypes: ["normal"] });
+        windowId = win?.id ?? null;
+      } catch (_) {}
+    }
+
+    if (fromPopup || fromEmbed) {
+      const res = await new Promise((resolve) => {
+        chrome.runtime.sendMessage({ type: "OPEN_FULLSCREEN_TAB", windowId }, (response) => {
+          if (chrome.runtime.lastError) resolve({ error: chrome.runtime.lastError.message });
+          else resolve(response || {});
+        });
+      });
+      if (res.error) {
+        setHeaderStatus(res.error, "error");
+        return false;
+      }
+      setHeaderStatus(t("fullscreenOpened"), "success");
+      if (fromEmbed) window.parent.postMessage({ type: "CSX_CLOSE" }, "*");
+      else if (fromPopup) setTimeout(() => window.close(), 300);
+      return true;
     }
 
     const createOpts = {
       url: chrome.runtime.getURL("app.html?fullscreen=1"),
       active: true,
     };
-    if (winId) createOpts.windowId = winId;
+    if (windowId) createOpts.windowId = windowId;
 
-    chrome.tabs.create(createOpts, () => {
-      if (chrome.runtime.lastError) {
-        setHeaderStatus(chrome.runtime.lastError.message, "error");
-        return;
-      }
-      setHeaderStatus(t("fullscreenOpened"), "success");
-      if (fromEmbed) {
-        window.parent.postMessage({ type: "CSX_CLOSE" }, "*");
-      } else if (fromStandalone) {
-        setTimeout(() => void closeCurrentSurface(), 400);
-      } else if (fromPopup) {
-        setTimeout(() => window.close(), 300);
-      }
+    return new Promise((resolve) => {
+      chrome.tabs.create(createOpts, () => {
+        if (chrome.runtime.lastError) {
+          setHeaderStatus(chrome.runtime.lastError.message, "error");
+          resolve(false);
+          return;
+        }
+        setHeaderStatus(t("fullscreenOpened"), "success");
+        if (fromStandalone) setTimeout(() => void closeCurrentSurface(), 400);
+        resolve(true);
+      });
     });
   }
 
@@ -538,14 +610,7 @@
       e.preventDefault();
       openAppSettingsDialog();
     });
-    $("appSettingsLang")?.addEventListener("change", (e) => {
-      onLangChange(e.target.value);
-    });
-    $("appSettingsCloseBtn")?.addEventListener("click", (e) => {
-      e.preventDefault();
-      closeAppSettingsDialog();
-    });
-    $("appSettingsDialog")?.addEventListener("cancel", (e) => {
+    $("settingsCloseBtn")?.addEventListener("click", (e) => {
       e.preventDefault();
       closeAppSettingsDialog();
     });

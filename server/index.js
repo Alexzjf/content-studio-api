@@ -1,4 +1,5 @@
 import express from "express";
+import { mountAuthRoutes } from "./auth.js";
 import { readFileSync, existsSync } from "fs";
 import { geminiGenerate } from "./gemini.js";
 import { createKeyPool, parseApiKeys } from "./key-pool.js";
@@ -91,7 +92,7 @@ function authMiddleware(req, res, next) {
   next();
 }
 
-const API_VERSION = "1.32.0";
+const API_VERSION = "1.41.0";
 const INTERNAL_RETRY_MS = Number(process.env.INTERNAL_RETRY_MS || 90000);
 const KEY_COOLDOWN_MS = Number(process.env.KEY_COOLDOWN_MS || 30000);
 
@@ -165,8 +166,12 @@ app.get("/health", (_req, res) => {
     keys: keyPool.size,
     rotation: "instant-failover",
     fallbacks: ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite"],
+    auth: !!process.env.AUTH_JWT_SECRET || !!EXTENSION_SECRET,
+    telegram: !!process.env.TELEGRAM_BOT_TOKEN,
   });
 });
+
+mountAuthRoutes(app);
 
 app.post("/v1/chat", authMiddleware, async (req, res) => {
   try {

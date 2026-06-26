@@ -1,0 +1,75 @@
+.csx-comment-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin-left: 4px;
+  padding: 0 8px;
+  min-height: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.04));
+  color: #ededee;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.15s ease, opacity 0.2s ease;
+  vertical-align: middle;
+}
+
+.csx-comment-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.24);
+  transform: translateY(-1px);
+}
+
+.csx-comment-btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.csx-comment-btn-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  background: #f3f4f6;
+  color: #0b0b0d;
+  font-size: 9px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.csx-comment-btn-label {
+  white-space: nowrap;
+}
+
+.csx-toast {
+  position: fixed;
+  top: 14px;
+  left: 50%;
+  z-index: 2147483647;
+  transform: translateX(-50%) translateY(-120%);
+  opacity: 0;
+  padding: 8px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(12, 12, 14, 0.94);
+  color: #ededee;
+  font-size: 12px;
+  pointer-events: none;
+  transition: transform 0.25s ease, opacity 0.25s ease;
+}
+
+.csx-toast.visible {
+  transform: translateX(-50%) translateY(0);
+  opacity: 1;
+}
+
+.csx-toast.error {
+  border-color: rgba(240, 85, 106, 0.45);
+  color: #ffb4be;
+}

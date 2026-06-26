@@ -21,11 +21,15 @@
     html.mode-embed-panel,
     html.mode-fullscreen-tab,
     html.mode-standalone-window,
-    body.mode-side-panel,
+html.mode-settings-page,
+html.mode-auth-page,
+body.mode-side-panel,
     body.mode-dock-panel,
     body.mode-embed-panel,
     body.mode-fullscreen-tab,
-    body.mode-standalone-window {
+    body.mode-standalone-window,
+    body.mode-settings-page,
+body.mode-auth-page {
       width: 100% !important;
       min-width: 320px !important;
       max-width: none !important;
@@ -75,7 +79,7 @@
         <button type="button" id="compactPanelBtn" class="chrome-btn chrome-btn-compact hidden" data-i18n-title="closeSurface" title="Close">
           <svg class="chrome-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
         </button>
-        <button type="button" id="openAppSettingsBtn" class="chrome-btn chrome-btn-settings" data-i18n-title="settings" title="Settings" aria-haspopup="dialog" aria-controls="appSettingsDialog">
+        <button type="button" id="openAppSettingsBtn" class="chrome-btn chrome-btn-settings" data-i18n-title="settings" title="Settings">
           <svg class="chrome-icon" width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true">
             <path d="M10 12.2a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4Z" stroke="currentColor" stroke-width="1.5"/>
             <path d="M16.1 12.4l1.1.7a1 1 0 0 1 .4 1.1l-.2.7a1 1 0 0 1-.9.7 8.6 8.6 0 0 1-1.2 0 1 1 0 0 0-1 .6l-.2.9a1 1 0 0 1-1 .8h-1.4a1 1 0 0 1-1-.8l-.2-.9a1 1 0 0 0-1-.6 8.6 8.6 0 0 1-1.2 0 1 1 0 0 1-.9-.7l-.2-.7a1 1 0 0 1 .4-1.1l1.1-.7a1 1 0 0 0 .4-1l-.2-1.1a1 1 0 0 1 .6-.9l.7-.2a8.6 8.6 0 0 1 0-1.2 1 1 0 0 1-.6-.9l.2-.7a1 1 0 0 1 .9-.6h1.4a1 1 0 0 1 1 .6l.2.7a1 1 0 0 0 1 .6 8.6 8.6 0 0 1 1.2 0 1 1 0 0 1 .9.6l-.2.7a1 1 0 0 1-.6.9l-.2 1.1a1 1 0 0 0 .4 1Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
@@ -86,6 +90,7 @@
   </header>
   <div id="headerStatus" class="header-status hidden" aria-live="polite"></div>
 
+  <div class="app-workspace" id="appWorkspace">
   <div class="app">
     <aside class="sidebar">
       <header class="brand brand-sidebar">
@@ -122,109 +127,6 @@
         <div id="status" class="status hidden"></div>
         <progress id="progress" class="hidden" max="100" value="0"></progress>
       </section>
-
-      <section class="panel">
-        <details id="settingsDetails">
-          <summary data-i18n="settings">Settings</summary>
-
-          <label><span data-i18n="whisperLang">Transcription language</span>
-            <select id="whisperLang">
-              <option value="auto" data-i18n="whisperAuto">Auto</option>
-              <option value="uk" data-i18n="postLangUk">Ukrainian</option>
-              <option value="en" data-i18n="postLangEn">English</option>
-            </select>
-          </label>
-
-          <div class="ai-settings-block">
-            <p class="settings-group-title" data-i18n="aiSettingsTitle">AI</p>
-            <p class="field-hint" id="aiModeHint" data-i18n="aiOwnFlowHint">Pick any AI service → paste your API key → chat works immediately.</p>
-
-            <div id="aiSettingsFields">
-              <label><span data-i18n="aiConnectionModeLabel">How to connect AI</span>
-                <select id="aiConnectionMode">
-                  <option value="own" data-i18n="aiConnectionOwn">My own API key</option>
-                  <option value="shared" data-i18n="aiConnectionShared">Shared AI assistant</option>
-                </select>
-              </label>
-              <p class="field-hint" id="aiSharedHint" data-i18n="aiSharedHint">Shared server for everyone — delays and temporary overload are possible.</p>
-
-              <div id="aiOwnBlock" class="ai-provider-fields hidden">
-                <label><span data-i18n="aiOwnProviderLabel">AI service</span>
-                  <select id="aiOwnProvider"></select>
-                </label>
-                <label><span data-i18n="ownApiKeyLabel">API key</span>
-                  <input type="password" id="ownApiKey" autocomplete="off" data-i18n-placeholder="ownApiKeyPlaceholder" />
-                </label>
-                <p class="field-hint" id="ownApiKeyHint"></p>
-                <button type="button" id="testApiBtn" class="btn btn-ghost btn-sm" style="margin-top:8px;width:100%" data-i18n="testApi">Test API</button>
-              </div>
-
-              <label><span data-i18n="aiCharacter">Character / tone</span>
-                <select id="postStyle">
-                  <option value="punchy" data-i18n="stylePunchy">Punchy</option>
-                  <option value="casual" data-i18n="styleCasual">Casual</option>
-                  <option value="expert" data-i18n="styleExpert">Expert</option>
-                  <option value="story" data-i18n="styleStory">Story</option>
-                  <option value="news" data-i18n="styleNews">News</option>
-                  <option value="minimal" data-i18n="styleMinimal">Minimal</option>
-                  <option value="sarcastic" data-i18n="styleSarcastic">Sarcastic</option>
-                  <option value="motivational" data-i18n="styleMotivational">Motivational</option>
-                  <option value="provocative" data-i18n="styleProvocative">Provocative</option>
-                  <option value="poetic" data-i18n="stylePoetic">Poetic</option>
-                  <option value="technical" data-i18n="styleTechnical">Technical</option>
-                  <option value="degen" data-i18n="styleDegen">Degen / crypto-native</option>
-                  <option value="warm" data-i18n="styleWarm">Warm</option>
-                  <option value="contrarian" data-i18n="styleContrarian">Contrarian</option>
-                </select>
-              </label>
-              <label><span data-i18n="postLength">Post length</span>
-                <select id="postLength">
-                  <option value="auto" data-i18n="lengthAuto">Auto</option>
-                  <option value="micro" data-i18n="lengthMicro">Micro (&lt;120 chars)</option>
-                  <option value="short" data-i18n="lengthShort">One tweet</option>
-                  <option value="medium" data-i18n="lengthMedium">Medium</option>
-                  <option value="long" data-i18n="lengthLong">Long-form</option>
-                </select>
-              </label>
-              <label><span data-i18n="emojiMode">Emojis</span>
-                <select id="emojiMode">
-                  <option value="none" data-i18n="emojiNone">None</option>
-                  <option value="light" data-i18n="emojiLight">Light (0–1)</option>
-                  <option value="normal" data-i18n="emojiNormal">Normal (1–3)</option>
-                </select>
-              </label>
-              <label><span data-i18n="perspective">Perspective</span>
-                <select id="perspective">
-                  <option value="auto" data-i18n="perspectiveAuto">Auto</option>
-                  <option value="first" data-i18n="perspectiveFirst">First person (I)</option>
-                  <option value="second" data-i18n="perspectiveSecond">Second person (you)</option>
-                  <option value="third" data-i18n="perspectiveThird">Third person</option>
-                </select>
-              </label>
-              <label><span data-i18n="temperature">Creativity</span>
-                <select id="temperature">
-                  <option value="0.5" data-i18n="tempLow">Lower</option>
-                  <option value="0.7" data-i18n="tempMid">Medium</option>
-                  <option value="0.85" selected data-i18n="tempHigh">Higher</option>
-                  <option value="1.0" data-i18n="tempMax">Maximum</option>
-                </select>
-              </label>
-              <label><span data-i18n="postLang">Response language</span>
-                <select id="postLang">
-                  <option value="auto" data-i18n="postLangAuto">Auto</option>
-                  <option value="en" data-i18n="postLangEn">English</option>
-                  <option value="uk" data-i18n="postLangUk">Ukrainian</option>
-                </select>
-              </label>
-              <label><span data-i18n="customRules">Extra rules</span>
-                <textarea id="customInstructions" rows="3" data-i18n-placeholder="customRulesPlaceholder"></textarea>
-              </label>
-            </div>
-            <p class="field-hint side-width-hint hidden" id="sideWidthHint" data-i18n="sideWidthHint"></p>
-            <p class="settings-version" id="settingsVersion"></p>
-          </div>
-        </details>
-      </section>
     </aside>
 
     <main class="workspace">
@@ -260,20 +162,306 @@
       </form>
     </main>
   </div>
+  </div>
 
-  <dialog id="appSettingsDialog" class="app-settings-dialog">
-    <form method="dialog" id="appSettingsForm">
-      <h3 data-i18n="settings">Settings</h3>
-      <label class="settings-field">
-        <span data-i18n="uiLang">Interface language</span>
-        <select id="appSettingsLang"></select>
-      </label>
-      <p class="field-hint" data-i18n="settingsMoreSoon">More options will appear here later.</p>
-      <div class="dialog-actions">
-        <button type="button" id="appSettingsCloseBtn" class="btn btn-ghost" data-i18n="close">Close</button>
+  <div id="authGate" class="auth-gate" aria-hidden="false">
+    <div class="auth-gate-scrim" aria-hidden="true"></div>
+    <div class="auth-card" role="dialog" aria-labelledby="authTitle" aria-modal="true">
+      <div class="auth-brand">
+        <span class="wordmark wordmark-auth" aria-label="cheatXtwitter">
+          <span class="wordmark-light">cheat</span><span class="wordmark-x">X</span><span class="wordmark-light">twitter</span>
+        </span>
       </div>
-    </form>
-  </dialog>
+      <h1 id="authTitle" class="auth-title" data-i18n="authTitle">Sign in to get started</h1>
+      <p class="auth-lead" data-i18n="authLead">Create an account or sign in to use posts, chat and X comments.</p>
+
+      <div class="auth-view-pick">
+        <span class="auth-view-label" data-i18n="authViewLabel">How to open</span>
+        <div class="auth-view-group view-mode-group" role="group" aria-label="View mode">
+          <button type="button" class="view-mode-btn auth-view-btn view-mode-btn-active" data-auth-view="side" data-i18n-title="dockPanel" title="Dock panel on the right">
+            <svg class="chrome-icon" width="16" height="16" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+              <rect x="1.5" y="3" width="15" height="12" rx="1.5" stroke="currentColor" stroke-width="1.4"/>
+              <line x1="12.25" y1="3" x2="12.25" y2="15" stroke="currentColor" stroke-width="1.2"/>
+              <rect x="12.25" y="3" width="4.25" height="12" rx="0.5" fill="currentColor" opacity="0.42"/>
+            </svg>
+            <span data-i18n="viewDockShort">Side</span>
+          </button>
+          <button type="button" class="view-mode-btn auth-view-btn" data-auth-view="window" data-i18n-title="openWindow" title="Open in separate window">
+            <svg class="chrome-icon" width="16" height="16" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+              <rect x="2.5" y="4.5" width="10" height="10" rx="1.2" stroke="currentColor" stroke-width="1.4"/>
+              <path d="M6 4.5V3.5a1 1 0 0 1 1-1h7a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1h-1" stroke="currentColor" stroke-width="1.4"/>
+            </svg>
+            <span data-i18n="viewWindowShort">Win</span>
+          </button>
+          <button type="button" class="view-mode-btn auth-view-btn" data-auth-view="fullscreen" data-i18n-title="openFullscreen" title="Open fullscreen in browser">
+            <svg class="chrome-icon" width="16" height="16" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+              <path d="M3 6.5V4.5a1 1 0 0 1 1-1h2M11 3.5h2a1 1 0 0 1 1 1v2M14.5 11v2a1 1 0 0 1-1 1h-2M7 14.5H5a1 1 0 0 1-1-1v-2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+              <rect x="5.5" y="5.5" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.4"/>
+            </svg>
+            <span data-i18n="viewFullscreenShort">Full</span>
+          </button>
+        </div>
+        <p id="authViewStatus" class="auth-view-status hidden" aria-live="polite"></p>
+      </div>
+
+      <div id="authSocialBlock" class="auth-social-block">
+      <div class="auth-social">
+        <button type="button" id="authGoogleBtn" class="auth-social-btn auth-social-google">
+          <span class="auth-social-icon" aria-hidden="true">G</span>
+          <span data-i18n="authGoogle">Continue with Google</span>
+        </button>
+        <button type="button" id="authTelegramBtn" class="auth-social-btn auth-social-telegram">
+          <span class="auth-social-icon" aria-hidden="true">✈</span>
+          <span data-i18n="authTelegram">Continue with Telegram</span>
+        </button>
+        <button type="button" id="authXBtn" class="auth-social-btn auth-social-x">
+          <span class="auth-social-icon" aria-hidden="true">𝕏</span>
+          <span data-i18n="authX">Continue with X</span>
+        </button>
+      </div>
+
+      <div class="auth-divider"><span data-i18n="authOrEmail">or with email</span></div>
+      </div>
+
+      <form id="authForm" class="auth-form" novalidate>
+        <label class="field auth-field hidden" id="authNameField">
+          <span data-i18n="authName">Name</span>
+          <input type="text" id="authName" autocomplete="name" data-i18n-placeholder="authNamePlaceholder" />
+        </label>
+        <label class="field auth-field">
+          <span data-i18n="authEmail">Email</span>
+          <input type="email" id="authEmail" required autocomplete="email" data-i18n-placeholder="authEmailPlaceholder" />
+        </label>
+        <label class="field auth-field">
+          <span data-i18n="authPassword">Password</span>
+          <input type="password" id="authPassword" required minlength="6" autocomplete="current-password" data-i18n-placeholder="authPasswordPlaceholder" />
+        </label>
+        <p id="authError" class="auth-error hidden" role="alert"></p>
+        <button type="submit" id="authSubmitBtn" class="btn btn-primary auth-submit" data-i18n="authSignIn">Sign in</button>
+      </form>
+
+      <p class="auth-switch">
+        <button type="button" id="authToggleModeBtn" class="auth-link-btn" data-i18n="authNoAccount">No account? Register</button>
+      </p>
+      <p class="auth-oauth-setup">
+        <a href="oauth-setup.html" target="_blank" rel="noopener" data-i18n="authOAuthSetup">OAuth setup for devs</a>
+      </p>
+    </div>
+  </div>
+
+  <div id="appSettingsPage" class="app-settings-page hidden" aria-hidden="true">
+    <header class="settings-topbar">
+      <button type="button" id="settingsCloseBtn" class="settings-back-btn" data-i18n="settingsBack">← Back</button>
+      <span class="settings-topbar-title" data-i18n="settings">Settings</span>
+      <span id="settingsStatus" class="settings-topbar-status hidden" aria-live="polite"></span>
+    </header>
+
+    <div class="settings-shell">
+      <nav class="settings-nav" aria-label="Settings sections">
+        <p class="settings-nav-group" data-i18n="settingsNavExtension">Extension</p>
+        <button type="button" class="settings-nav-item active" data-section="general" data-i18n="settingsNavGeneral">General</button>
+
+        <p class="settings-nav-group" data-i18n="settingsNavAi">AI</p>
+        <button type="button" class="settings-nav-item" data-section="ai" data-i18n="settingsNavAiConnect">Connection</button>
+
+        <p class="settings-nav-group" data-i18n="settingsNavContent">Content</p>
+        <button type="button" class="settings-nav-item" data-section="posts" data-i18n="settingsSectionPosts">Posts & chat</button>
+        <button type="button" class="settings-nav-item" data-section="comments" data-i18n="settingsSectionComments">Comments on X</button>
+      </nav>
+
+      <div class="settings-panels">
+        <section class="settings-panel active" data-panel="general">
+          <header class="settings-panel-head">
+            <h2 data-i18n="settingsNavGeneral">General</h2>
+            <p data-i18n="settingsPanelGeneralDesc">Language and transcription for video sources.</p>
+          </header>
+          <label class="field">
+            <span data-i18n="uiLang">Interface language</span>
+            <select id="settingsUiLang"></select>
+          </label>
+          <label class="field">
+            <span data-i18n="whisperLang">Transcription language</span>
+            <select id="whisperLang">
+              <option value="auto" data-i18n="whisperAuto">Auto</option>
+              <option value="uk" data-i18n="postLangUk">Ukrainian</option>
+              <option value="en" data-i18n="postLangEn">English</option>
+            </select>
+          </label>
+        </section>
+
+        <section class="settings-panel" data-panel="ai">
+          <header class="settings-panel-head">
+            <h2 data-i18n="settingsNavAiConnect">Connection</h2>
+            <p class="field-hint" id="aiModeHint" data-i18n="aiOwnFlowHint">Pick any AI service → paste your API key → chat works immediately.</p>
+          </header>
+          <div id="aiSettingsFields">
+            <label class="field">
+              <span data-i18n="aiConnectionModeLabel">How to connect AI</span>
+              <select id="aiConnectionMode">
+                <option value="own" data-i18n="aiConnectionOwn">My own API key</option>
+                <option value="shared" data-i18n="aiConnectionShared">Shared AI assistant</option>
+              </select>
+            </label>
+            <p class="field-hint" id="aiSharedHint" data-i18n="aiSharedHint">Shared server for everyone — delays and temporary overload are possible.</p>
+            <div id="aiOwnBlock" class="ai-provider-fields hidden">
+              <label class="field">
+                <span data-i18n="aiOwnProviderLabel">AI service</span>
+                <select id="aiOwnProvider"></select>
+              </label>
+              <label class="field">
+                <span data-i18n="ownApiKeyLabel">API key</span>
+                <input type="password" id="ownApiKey" autocomplete="off" data-i18n-placeholder="ownApiKeyPlaceholder" />
+              </label>
+              <p class="field-hint" id="ownApiKeyHint"></p>
+              <button type="button" id="testApiBtn" class="btn btn-ghost btn-sm settings-test-api" data-i18n="testApi">Test API</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-panel" data-panel="posts">
+          <header class="settings-panel-head">
+            <h2 data-i18n="settingsSectionPosts">Posts & chat</h2>
+            <p data-i18n="settingsPanelPostsDesc">Tone and style for generated posts and chat replies.</p>
+          </header>
+          <div class="field-row">
+            <label class="field">
+              <span data-i18n="aiCharacter">Character / tone</span>
+              <select id="postStyle">
+                <option value="punchy" data-i18n="stylePunchy">Punchy</option>
+                <option value="casual" data-i18n="styleCasual">Casual</option>
+                <option value="expert" data-i18n="styleExpert">Expert</option>
+                <option value="story" data-i18n="styleStory">Story</option>
+                <option value="news" data-i18n="styleNews">News</option>
+                <option value="minimal" data-i18n="styleMinimal">Minimal</option>
+                <option value="sarcastic" data-i18n="styleSarcastic">Sarcastic</option>
+                <option value="motivational" data-i18n="styleMotivational">Motivational</option>
+                <option value="provocative" data-i18n="styleProvocative">Provocative</option>
+                <option value="poetic" data-i18n="stylePoetic">Poetic</option>
+                <option value="technical" data-i18n="styleTechnical">Technical</option>
+                <option value="degen" data-i18n="styleDegen">Degen / crypto-native</option>
+                <option value="warm" data-i18n="styleWarm">Warm</option>
+                <option value="contrarian" data-i18n="styleContrarian">Contrarian</option>
+              </select>
+            </label>
+            <label class="field">
+              <span data-i18n="postLength">Post length</span>
+              <select id="postLength">
+                <option value="auto" data-i18n="lengthAuto">Auto</option>
+                <option value="micro" data-i18n="lengthMicro">Micro (&lt;120 chars)</option>
+                <option value="short" data-i18n="lengthShort">One tweet</option>
+                <option value="medium" data-i18n="lengthMedium">Medium</option>
+                <option value="long" data-i18n="lengthLong">Long-form</option>
+              </select>
+            </label>
+          </div>
+          <div class="field-row">
+            <label class="field">
+              <span data-i18n="emojiMode">Emojis</span>
+              <select id="emojiMode">
+                <option value="none" data-i18n="emojiNone">None</option>
+                <option value="light" data-i18n="emojiLight">Light (0–1)</option>
+                <option value="normal" data-i18n="emojiNormal">Normal (1–3)</option>
+              </select>
+            </label>
+            <label class="field">
+              <span data-i18n="perspective">Perspective</span>
+              <select id="perspective">
+                <option value="auto" data-i18n="perspectiveAuto">Auto</option>
+                <option value="first" data-i18n="perspectiveFirst">First person (I)</option>
+                <option value="second" data-i18n="perspectiveSecond">Second person (you)</option>
+                <option value="third" data-i18n="perspectiveThird">Third person</option>
+              </select>
+            </label>
+          </div>
+          <div class="field-row">
+            <label class="field">
+              <span data-i18n="temperature">Creativity</span>
+              <select id="temperature">
+                <option value="0.5" data-i18n="tempLow">Lower</option>
+                <option value="0.7" data-i18n="tempMid">Medium</option>
+                <option value="0.85" selected data-i18n="tempHigh">Higher</option>
+                <option value="1.0" data-i18n="tempMax">Maximum</option>
+              </select>
+            </label>
+            <label class="field">
+              <span data-i18n="postLang">Response language</span>
+              <select id="postLang">
+                <option value="auto" data-i18n="postLangAuto">Auto</option>
+                <option value="en" data-i18n="postLangEn">English</option>
+                <option value="uk" data-i18n="postLangUk">Ukrainian</option>
+              </select>
+            </label>
+          </div>
+          <label class="field">
+            <span data-i18n="customRules">Extra rules</span>
+            <textarea id="customInstructions" rows="4" data-i18n-placeholder="customRulesPlaceholder"></textarea>
+          </label>
+        </section>
+
+        <section class="settings-panel" data-panel="comments">
+          <header class="settings-panel-head settings-panel-head-row">
+            <div>
+              <h2 data-i18n="settingsSectionComments">Comments on X</h2>
+              <p data-i18n="commentModeHint">Analyze a post and draft a reply — you review and publish on X.</p>
+            </div>
+            <label class="toggle" title="On / Off">
+              <input type="checkbox" id="commentModeEnabled" />
+              <span class="toggle-track" aria-hidden="true"></span>
+              <span class="toggle-label" data-i18n="commentModeEnabled">cheatX on posts</span>
+            </label>
+          </header>
+          <div id="commentSettingsBlock" class="comment-settings-block">
+            <div class="field-row">
+              <label class="field">
+                <span data-i18n="commentLang">Comment language</span>
+                <select id="commentLang"></select>
+              </label>
+              <label class="field">
+                <span data-i18n="commentStyle">Comment style</span>
+                <select id="commentStyle"></select>
+              </label>
+            </div>
+            <div class="field-row">
+              <label class="field">
+                <span data-i18n="commentMinLen">Min characters</span>
+                <input type="number" id="commentMinLen" min="20" max="400" step="5" />
+              </label>
+              <label class="field">
+                <span data-i18n="commentMaxLen">Max characters</span>
+                <input type="number" id="commentMaxLen" min="80" max="500" step="5" />
+              </label>
+            </div>
+            <label class="field">
+              <span data-i18n="commentEmoji">Emojis in comments</span>
+              <select id="commentEmoji"></select>
+            </label>
+            <div class="checks">
+              <label class="check">
+                <input type="checkbox" id="commentAnalyzeVideo" />
+                <span data-i18n="commentAnalyzeVideo">Transcribe video in posts</span>
+              </label>
+              <label class="check">
+                <input type="checkbox" id="commentAnalyzeImages" />
+                <span data-i18n="commentAnalyzeImages">Describe images in posts</span>
+              </label>
+              <label class="check">
+                <input type="checkbox" id="commentEndWithQuestion" />
+                <span data-i18n="commentEndWithQuestion">Sometimes end with a sharp question</span>
+              </label>
+            </div>
+            <label class="field">
+              <span data-i18n="commentCustomRules">Extra rules for comments</span>
+              <textarea id="commentCustomInstructions" rows="4" data-i18n-placeholder="commentCustomRulesPlaceholder"></textarea>
+            </label>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <footer class="settings-footer">
+      <span class="settings-version" id="appSettingsVersion"></span>
+    </footer>
+  </div>
 
   <dialog id="pasteDialog">
     <form method="dialog" id="pasteForm">
@@ -287,6 +475,7 @@
     </form>
   </dialog>
 
+  <script src="auth-config.local.js"></script>
   <script src="extension-config.js"></script>
   <script src="extension-runtime.js"></script>
   <script src="panel-config.js"></script>
@@ -297,6 +486,9 @@
   <script src="ai-providers.js" data-csx-ai="ai-providers.js"></script>
   <script src="ai-client.js" data-csx-ai="ai-client.js"></script>
   <script src="app-boot.js"></script>
+  <script src="auth.js"></script>
+  <script src="settings-defaults.js"></script>
+  <script src="settings.js"></script>
   <script src="audio-extract.js"></script>
   <script src="app.js"></script>
 </body>
