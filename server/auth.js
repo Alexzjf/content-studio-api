@@ -83,13 +83,19 @@ function requireAuth(req, res, next) {
   next();
 }
 
-async function loginWithGoogle(idToken) {
-  if (!idToken) throw new Error("Missing Google token");
-  const res = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`);
+async function loginWithGoogle({ idToken, accessToken } = {}) {
+  if (!idToken && !accessToken) throw new Error("Missing Google token");
+  const query = idToken
+    ? `id_token=${encodeURIComponent(idToken)}`
+    : `access_token=${encodeURIComponent(accessToken)}`;
+  const res = await fetch(`https://oauth2.googleapis.com/tokeninfo?${query}`);
   if (!res.ok) throw new Error("Invalid Google token");
   const profile = await res.json();
-  if (!profile.email || !profile.sub) throw new Error("Google profile incomplete");
-  return findOrCreateOAuthUser("google", profile.sub, profile.email, profile.name || profile.email);
+  if (!profile.email || !(profile.sub || profile.user_id)) {
+    throw new Error("Google profile incomplete");
+  }
+  const sub = profile.sub || profile.user_id;
+  return findOrCreateOAuthUser("google", sub, profile.email, profile.name || profile.email);
 }
 
 async function loginWithTelegram(auth) {
@@ -278,7 +284,7 @@ export function mountAuthRoutes(app) {
     try {
       const { provider, idToken, accessToken, telegramAuth } = req.body || {};
       let result;
-      if (provider === "google") result = await loginWithGoogle(idToken);
+      if (provider === "google") result = await loginWithGoogle({ idToken, accessToken });
       else if (provider === "telegram") result = await loginWithTelegram(telegramAuth);
       else if (provider === "x") result = await loginWithX(accessToken);
       else return res.status(400).json({ error: "Unsupported provider" });

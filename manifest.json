@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "__MSG_extensionName__",
-  "version": "1.42.0",
+  "version": "1.42.1",
   "description": "__MSG_extensionDescription__",
   "default_locale": "en",
   "icons": {
@@ -11,6 +11,10 @@
     "128": "assets/icons/icon-128.png"
   },
   "permissions": ["storage", "activeTab", "offscreen", "scripting", "windows", "tabs", "sidePanel", "system.display", "identity"],
+  "oauth2": {
+    "client_id": "885065993868-0fpub31tvtk0d7q6s58559upkljun8e7.apps.googleusercontent.com",
+    "scopes": ["openid", "email", "profile"]
+  },
   "host_permissions": [
     "http://localhost:3001/*",
     "http://127.0.0.1:3001/*",

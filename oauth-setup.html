@@ -29,6 +29,16 @@
     <div class="label">Google redirect (авто для Chrome Extension)</div>
     <pre id="googleRedirect">…</pre>
     <button type="button" data-copy="googleRedirect">Copy</button>
+    <p style="color:#fbbf24;font-size:13px;margin-top:12px">
+      <strong>Якщо помилка redirect_uri_mismatch:</strong>
+    </p>
+    <ol style="color:#9ca3af;font-size:13px;margin:8px 0 0;padding-left:18px">
+      <li>Відкрий <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener" style="color:#93c5fd">Google Cloud → Credentials</a></li>
+      <li>Створи <strong>OAuth client ID</strong> → тип <strong>Chrome Extension</strong> (не Web!)</li>
+      <li><strong>Item ID</strong> = Extension ID з блоку вище: <code>olbifmgcbcgnmigblnkhchnnjmlgiafk</code></li>
+      <li>Client ID встав у <code>auth-config.local.js</code> і в <code>manifest.json</code> → <code>oauth2.client_id</code></li>
+      <li>Redirect URI вручну не потрібен — Chrome використовує <code>getAuthToken</code></li>
+    </ol>
   </div>
 
   <div class="card">

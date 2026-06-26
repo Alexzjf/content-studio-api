@@ -244,29 +244,15 @@
     const clientId = globalThis.EXTENSION_CONFIG?.googleClientId;
     if (!clientId) throw new Error(t("authProviderNotConfigured"));
 
-    const redirectUrl = chrome.identity.getRedirectURL();
-    const nonce = crypto.randomUUID();
-    const authUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
-    authUrl.searchParams.set("client_id", clientId);
-    authUrl.searchParams.set("response_type", "id_token");
-    authUrl.searchParams.set("redirect_uri", redirectUrl);
-    authUrl.searchParams.set("scope", "openid email profile");
-    authUrl.searchParams.set("nonce", nonce);
-
-    const responseUrl = await new Promise((resolve, reject) => {
-      chrome.identity.launchWebAuthFlow({ url: authUrl.toString(), interactive: true }, (url) => {
+    const accessToken = await new Promise((resolve, reject) => {
+      chrome.identity.getAuthToken({ interactive: true }, (token) => {
         if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-        else if (!url) reject(new Error(t("authCancelled")));
-        else resolve(url);
+        else if (!token) reject(new Error(t("authCancelled")));
+        else resolve(token);
       });
     });
 
-    const hash = new URL(responseUrl).hash.replace(/^#/, "");
-    const params = new URLSearchParams(hash);
-    const idToken = params.get("id_token");
-    if (!idToken) throw new Error(t("authFailed"));
-
-    const data = await apiRequest("/auth/social", { provider: "google", idToken });
+    const data = await apiRequest("/auth/social", { provider: "google", accessToken });
     await completeLogin(data, "google");
   }
 
@@ -435,6 +421,16 @@
   }
 
   async function signOut() {
+    try {
+      await new Promise((resolve) => {
+        chrome.identity.getAuthToken({ interactive: false }, (token) => {
+          if (token) chrome.identity.removeCachedAuthToken({ token }, resolve);
+          else resolve();
+        });
+      });
+    } catch {
+      /* ignore */
+    }
     await clearAuth();
     location.reload();
   }
