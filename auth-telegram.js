@@ -24,12 +24,5 @@
   script.setAttribute("data-size", "large");
   script.setAttribute("data-radius", "8");
   script.setAttribute("data-onauth", "onTelegramAuth(user)");
-  script.setAttribute("data-request-access", "write");
-  script.onload = () => {
-    status.textContent = "Sign in with Telegram";
-  };
-  script.onerror = () => {
-    status.textContent = "Could not load Telegram widget.";
-  };
   widget.appendChild(script);
 })();

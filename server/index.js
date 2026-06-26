@@ -1,5 +1,5 @@
 import express from "express";
-import { mountAuthRoutes } from "./auth.js";
+import { mountAuthRoutes, ensureTelegramWebhook } from "./auth.js";
 import { readFileSync, existsSync } from "fs";
 import { geminiGenerate } from "./gemini.js";
 import { createKeyPool, parseApiKeys } from "./key-pool.js";
@@ -92,7 +92,7 @@ function authMiddleware(req, res, next) {
   next();
 }
 
-const API_VERSION = "1.42.3";
+const API_VERSION = "1.42.6";
 const INTERNAL_RETRY_MS = Number(process.env.INTERNAL_RETRY_MS || 90000);
 const KEY_COOLDOWN_MS = Number(process.env.KEY_COOLDOWN_MS || 30000);
 
@@ -172,6 +172,7 @@ app.get("/health", (_req, res) => {
 });
 
 mountAuthRoutes(app);
+void ensureTelegramWebhook();
 
 app.post("/v1/chat", authMiddleware, async (req, res) => {
   try {

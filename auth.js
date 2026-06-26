@@ -271,6 +271,7 @@
       savedAt: Date.now(),
     });
     await persistPreferredView();
+    startSessionWatch();
     await unlockApp();
   }
 
@@ -487,6 +488,7 @@
 
     if (authed) {
       hideAuthGate();
+      startSessionWatch();
       readyResolve?.({ ok: true, restored: true });
       return;
     }
@@ -498,7 +500,7 @@
     window.I18n?.applyPageI18n?.();
   }
 
-  async function signOut() {
+  async function forceLogout() {
     try {
       await new Promise((resolve) => {
         chrome.identity.getAuthToken({ interactive: false }, (token) => {
@@ -511,6 +513,39 @@
     }
     await clearAuth();
     location.reload();
+  }
+
+  async function signOut() {
+    await forceLogout();
+  }
+
+  function startSessionWatch() {
+    let timer = null;
+    const tick = async () => {
+      const stored = await getStoredAuth();
+      if (!stored?.accessToken) return;
+      if (!isTokenValid(stored.accessToken)) {
+        await forceLogout();
+        return;
+      }
+      try {
+        const res = await fetch(`${crmApiBase()}/auth/me`, {
+          headers: { Authorization: `Bearer ${stored.accessToken}` },
+        });
+        if (!res.ok) await forceLogout();
+      } catch {
+        /* offline */
+      }
+    };
+    const arm = () => {
+      clearInterval(timer);
+      timer = setInterval(() => void tick(), 8000);
+    };
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") void tick();
+    });
+    window.addEventListener("focus", () => void tick());
+    arm();
   }
 
   async function getAccessToken() {

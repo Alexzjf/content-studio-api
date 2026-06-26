@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomBytes, randomUUID, scryptSync, timingSafeEqual } from "crypto";
 import {
+  assertTelegramUserConnected,
   buildUserProfile,
   createUser,
   createUserWithId,
@@ -11,9 +12,12 @@ import {
   initDb,
   isPlaceholderEmail,
   linkProvider,
+  markTelegramConnected,
+  revokeTelegramConnection,
   setRecoveryEmail,
   updateUserPassword,
   updateUserPrimaryEmail,
+  userHasTelegramProvider,
 } from "./db.js";
 
 initDb();
@@ -102,6 +106,11 @@ function ensureUserFromJwt(payload) {
   });
 }
 
+function ensureTelegramSession(user) {
+  if (!userHasTelegramProvider(user.id)) return;
+  assertTelegramUserConnected(user.id);
+}
+
 function requireAuth(req, res, next) {
   const auth = req.headers.authorization || "";
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
@@ -109,6 +118,14 @@ function requireAuth(req, res, next) {
   if (!payload) return res.status(401).json({ error: "Unauthorized" });
   const user = ensureUserFromJwt(payload);
   if (!user) return res.status(401).json({ error: "Unauthorized" });
+  try {
+    ensureTelegramSession(user);
+  } catch (err) {
+    return res.status(401).json({
+      error: err.message || "Telegram disconnected",
+      code: err.code || "TELEGRAM_DISCONNECTED",
+    });
+  }
   req.authUser = user;
   req.authPayload = payload;
   next();
@@ -156,7 +173,9 @@ async function loginWithTelegram(auth) {
     [auth.first_name, auth.last_name].filter(Boolean).join(" ").trim() ||
     auth.username?.toString() ||
     `Telegram ${id}`;
-  return findOrCreateOAuthUser("telegram", id, email, name);
+  const result = findOrCreateOAuthUser("telegram", id, email, name);
+  markTelegramConnected(id, result.user.id);
+  return result;
 }
 
 async function loginWithX(accessToken) {
@@ -210,14 +229,13 @@ function telegramWidgetPage(bot, redirectUri, lang = "en") {
 <html lang="en"><head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Sign in with Telegram</title>
+<title>Telegram</title>
 <style>
-  body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0c0c0e;color:#fff;font-family:system-ui,sans-serif}
-  .wrap{text-align:center;padding:24px}
-  p{color:#9ca3af;font-size:14px}
+  body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0c0c0e}
+  #widget{display:flex;justify-content:center}
 </style>
 </head><body>
-<div class="wrap"><p>Sign in with Telegram</p><div id="widget"></div></div>
+<div id="widget"></div>
 <script>
   function onTelegramAuth(user) {
     var redirect = ${JSON.stringify(redirectUri || "")};
@@ -234,10 +252,48 @@ function telegramWidgetPage(bot, redirectUri, lang = "en") {
   s.setAttribute("data-size", "large");
   s.setAttribute("data-radius", "8");
   s.setAttribute("data-onauth", "onTelegramAuth(user)");
-  s.setAttribute("data-request-access", "write");
   document.getElementById("widget").appendChild(s);
 </script>
 </body></html>`;
+}
+
+function handleTelegramWebhookUpdate(update) {
+  if (update?.my_chat_member) {
+    const member = update.my_chat_member;
+    const userId = member.from?.id;
+    const status = member.new_chat_member?.status;
+    if (userId && (status === "kicked" || status === "left")) {
+      revokeTelegramConnection(userId);
+    }
+  }
+
+  const text = update?.message?.text?.trim().toLowerCase();
+  const fromId = update?.message?.from?.id;
+  if (fromId && (text === "/disconnect" || text === "/logout")) {
+    revokeTelegramConnection(fromId);
+  }
+}
+
+export async function ensureTelegramWebhook() {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) return;
+  const base =
+    process.env.PUBLIC_API_URL?.replace(/\/$/, "") ||
+    "https://content-studio-api-1.onrender.com";
+  const url = `${base}/auth/telegram/webhook`;
+  try {
+    await fetch(`https://api.telegram.org/bot${token}/setWebhook`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        url,
+        allowed_updates: ["my_chat_member", "message"],
+        drop_pending_updates: true,
+      }),
+    });
+  } catch {
+    /* ignore */
+  }
 }
 
 export function mountAuthRoutes(app) {
@@ -249,6 +305,15 @@ export function mountAuthRoutes(app) {
       return res.status(400).send("bot and redirect_uri required");
     }
     res.type("html").send(telegramWidgetPage(bot, redirectUri, lang));
+  });
+
+  app.post("/auth/telegram/webhook", (req, res) => {
+    try {
+      handleTelegramWebhookUpdate(req.body);
+    } catch {
+      /* ignore */
+    }
+    res.sendStatus(200);
   });
 
   app.get("/auth/me", requireAuth, (req, res) => {

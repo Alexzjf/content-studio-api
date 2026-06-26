@@ -62,6 +62,15 @@ function runMigrations(database) {
     );
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_recovery_emails_email ON recovery_emails(email);
+
+    CREATE TABLE IF NOT EXISTS telegram_connections (
+      telegram_user_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      connected INTEGER NOT NULL DEFAULT 1,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_telegram_connections_user ON telegram_connections(user_id);
   `);
 
   const row = database.prepare("SELECT MAX(version) AS v FROM schema_migrations").get();
@@ -70,6 +79,11 @@ function runMigrations(database) {
     database
       .prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)")
       .run(1, new Date().toISOString());
+  }
+  if (current < 2) {
+    database
+      .prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)")
+      .run(2, new Date().toISOString());
   }
 }
 
@@ -309,4 +323,60 @@ export function buildUserProfile(userRow) {
       !placeholder,
     createdAt: userRow.created_at,
   };
+}
+
+export function markTelegramConnected(telegramUserId, userId) {
+  const now = new Date().toISOString();
+  getDb()
+    .prepare(
+      `INSERT INTO telegram_connections (telegram_user_id, user_id, connected, updated_at)
+       VALUES (?, ?, 1, ?)
+       ON CONFLICT(telegram_user_id) DO UPDATE SET
+         user_id = excluded.user_id,
+         connected = 1,
+         updated_at = excluded.updated_at`
+    )
+    .run(String(telegramUserId), userId, now);
+}
+
+export function revokeTelegramConnection(telegramUserId) {
+  const now = new Date().toISOString();
+  getDb()
+    .prepare(
+      `UPDATE telegram_connections SET connected = 0, updated_at = ?
+       WHERE telegram_user_id = ?`
+    )
+    .run(now, String(telegramUserId));
+}
+
+export function isTelegramConnected(telegramUserId) {
+  const row = getDb()
+    .prepare("SELECT connected FROM telegram_connections WHERE telegram_user_id = ?")
+    .get(String(telegramUserId));
+  if (!row) return true;
+  return row.connected === 1;
+}
+
+export function getTelegramProviderId(userId) {
+  const row = getDb()
+    .prepare(
+      `SELECT provider_account_id FROM auth_providers
+       WHERE user_id = ? AND provider = 'telegram' LIMIT 1`
+    )
+    .get(userId);
+  return row?.provider_account_id ? String(row.provider_account_id) : null;
+}
+
+export function userHasTelegramProvider(userId) {
+  return !!getTelegramProviderId(userId);
+}
+
+export function assertTelegramUserConnected(userId) {
+  const tgId = getTelegramProviderId(userId);
+  if (!tgId) return;
+  if (!isTelegramConnected(tgId)) {
+    const err = new Error("Telegram disconnected");
+    err.code = "TELEGRAM_DISCONNECTED";
+    throw err;
+  }
 }
