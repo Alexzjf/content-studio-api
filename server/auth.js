@@ -2,6 +2,7 @@ import { createHash, createHmac, randomBytes, randomUUID, scryptSync, timingSafe
 import {
   buildUserProfile,
   createUser,
+  createUserWithId,
   findUserById,
   findUserByLoginEmail,
   findUserByPrimaryEmail,
@@ -38,12 +39,15 @@ function jwtSecret() {
   return process.env.AUTH_JWT_SECRET || process.env.EXTENSION_SECRET || "change-auth-secret-in-production";
 }
 
-function signToken(user) {
+const JWT_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+
+function signToken(user, provider = "email") {
   const payload = {
     sub: user.id,
     email: user.primary_email,
     name: user.display_name,
-    exp: Date.now() + 7 * 24 * 60 * 60 * 1000,
+    provider,
+    exp: Date.now() + JWT_TTL_MS,
   };
   const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
   const sig = createHmac("sha256", jwtSecret()).update(body).digest("base64url");
@@ -66,10 +70,36 @@ export function verifyToken(token) {
 }
 
 function authResponse(userRow) {
+  const user = buildUserProfile(userRow);
   return {
-    accessToken: signToken(userRow),
-    user: buildUserProfile(userRow),
+    accessToken: signToken(userRow, user.provider || "email"),
+    user,
   };
+}
+
+function inferOAuthFromEmail(email) {
+  const m = String(email || "").match(/^(x|telegram)_([^@]+)@oauth\.cheatxtwitter\.local$/i);
+  if (!m) return { provider: "email", providerId: null };
+  return { provider: m[1].toLowerCase(), providerId: m[2] };
+}
+
+function ensureUserFromJwt(payload) {
+  let user = findUserById(payload.sub);
+  if (user) return user;
+  if (payload.email) {
+    user = findUserByPrimaryEmail(payload.email);
+    if (user) return user;
+  }
+  const inferred = inferOAuthFromEmail(payload.email);
+  const provider = payload.provider || inferred.provider;
+  return createUserWithId({
+    id: payload.sub,
+    displayName: payload.name || payload.email?.split("@")[0] || "User",
+    primaryEmail: payload.email,
+    passwordHash: hashPassword(randomUUID()),
+    provider,
+    providerAccountId: inferred.providerId,
+  });
 }
 
 function requireAuth(req, res, next) {
@@ -77,9 +107,10 @@ function requireAuth(req, res, next) {
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
   const payload = verifyToken(token);
   if (!payload) return res.status(401).json({ error: "Unauthorized" });
-  const user = findUserById(payload.sub);
+  const user = ensureUserFromJwt(payload);
   if (!user) return res.status(401).json({ error: "Unauthorized" });
   req.authUser = user;
+  req.authPayload = payload;
   next();
 }
 
@@ -206,6 +237,10 @@ export function mountAuthRoutes(app) {
 
   app.get("/auth/me", requireAuth, (req, res) => {
     res.json(buildUserProfile(req.authUser));
+  });
+
+  app.post("/auth/refresh", requireAuth, (req, res) => {
+    res.json(authResponse(req.authUser));
   });
 
   app.post("/auth/profile/link-email", requireAuth, (req, res) => {

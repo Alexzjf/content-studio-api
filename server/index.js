@@ -92,7 +92,7 @@ function authMiddleware(req, res, next) {
   next();
 }
 
-const API_VERSION = "1.42.1";
+const API_VERSION = "1.42.3";
 const INTERNAL_RETRY_MS = Number(process.env.INTERNAL_RETRY_MS || 90000);
 const KEY_COOLDOWN_MS = Number(process.env.KEY_COOLDOWN_MS || 30000);
 

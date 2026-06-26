@@ -183,11 +183,14 @@ export function getRecoveryEmail(userId) {
   return getDb().prepare("SELECT * FROM recovery_emails WHERE user_id = ?").get(userId) || null;
 }
 
-export function createUser({ displayName, primaryEmail, passwordHash, provider, providerAccountId }) {
+export function createUserWithId({ id, displayName, primaryEmail, passwordHash, provider, providerAccountId }) {
   const database = getDb();
+  const existing = findUserById(id) || findUserByPrimaryEmail(primaryEmail);
+  if (existing) return existing;
+
   const now = new Date().toISOString();
   const user = {
-    id: randomUUID(),
+    id,
     display_name: displayName,
     primary_email: primaryEmail,
     password_hash: passwordHash,
@@ -206,6 +209,17 @@ export function createUser({ displayName, primaryEmail, passwordHash, provider, 
   });
   tx();
   return user;
+}
+
+export function createUser({ displayName, primaryEmail, passwordHash, provider, providerAccountId }) {
+  return createUserWithId({
+    id: randomUUID(),
+    displayName,
+    primaryEmail,
+    passwordHash,
+    provider,
+    providerAccountId,
+  });
 }
 
 export function linkProvider(userId, provider, providerAccountId, linkedAt) {

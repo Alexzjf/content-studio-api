@@ -2132,6 +2132,16 @@ html.mode-settings-page body {
 }
 
 /* ── Auth gate ── */
+html.auth-pending #authGate {
+  opacity: 0;
+  pointer-events: none;
+}
+
+html.auth-pending.auth-locked .app-workspace,
+html.auth-pending body.auth-locked .app-workspace {
+  filter: none;
+}
+
 body.auth-locked .app-workspace {
   filter: blur(14px) saturate(0.88);
   pointer-events: none;

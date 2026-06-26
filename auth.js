@@ -70,6 +70,54 @@
     await chrome.storage.local.remove(AUTH_STORAGE_KEY);
   }
 
+  function decodeAccessToken(token) {
+    try {
+      const body = String(token || "").split(".")[0];
+      if (!body) return null;
+      const pad = "=".repeat((4 - (body.length % 4)) % 4);
+      const json = atob(body.replace(/-/g, "+").replace(/_/g, "/") + pad);
+      return JSON.parse(json);
+    } catch {
+      return null;
+    }
+  }
+
+  function isTokenValid(token) {
+    const payload = decodeAccessToken(token);
+    return !!(payload?.sub && payload?.exp && payload.exp > Date.now());
+  }
+
+  function hideAuthGate() {
+    $("authGate")?.classList.add("hidden");
+    $("authGate")?.setAttribute("aria-hidden", "true");
+    document.body.classList.remove("auth-locked");
+    document.documentElement.classList.remove("auth-locked");
+  }
+
+  async function tryRefreshSession(stored) {
+    try {
+      const res = await fetch(`${crmApiBase()}/auth/refresh`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${stored.accessToken}`,
+          Accept: "application/json",
+        },
+      });
+      if (!res.ok) return false;
+      const data = await res.json();
+      await saveAuth({
+        ...stored,
+        accessToken: data.accessToken,
+        user: data.user,
+        provider: data.user?.provider || stored.provider,
+        savedAt: Date.now(),
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async function apiRequest(path, body, method = "POST") {
     let res;
     const headers = { Accept: "application/json" };
@@ -337,19 +385,36 @@
       return false;
     }
 
+    if (!isTokenValid(stored.accessToken)) {
+      await clearAuth();
+      return false;
+    }
+
+    const hasCachedUser = !!(stored.user?.id || stored.user?.name);
+
     try {
       const res = await fetch(`${crmApiBase()}/auth/me`, {
         headers: { Authorization: `Bearer ${stored.accessToken}` },
       });
-      if (!res.ok) {
+      if (res.ok) {
+        const user = await res.json();
+        await saveAuth({
+          ...stored,
+          user,
+          provider: user.provider || stored.provider,
+          savedAt: Date.now(),
+        });
+        return true;
+      }
+      if (res.status === 401) {
+        if (await tryRefreshSession(stored)) return true;
+        if (hasCachedUser) return true;
         await clearAuth();
         return false;
       }
-      const user = await res.json();
-      await saveAuth({ ...stored, user, provider: user.provider || stored.provider });
-      return true;
+      return hasCachedUser || isTokenValid(stored.accessToken);
     } catch {
-      return true;
+      return isTokenValid(stored.accessToken);
     }
   }
 
@@ -395,6 +460,8 @@
       return;
     }
 
+    document.documentElement.classList.add("auth-pending");
+
     const { settings = {} } = await chrome.storage.local.get("settings");
     preferredView = settings.preferredViewMode || "side";
     const lang = settings.uiLang || window.I18n?.detectLocale?.() || "en";
@@ -407,14 +474,22 @@
     bindForm();
     setRegisterMode(false);
 
+    const stored = await getStoredAuth();
+    if (stored?.accessToken && isTokenValid(stored.accessToken)) {
+      hideAuthGate();
+    }
+
     const authed = await tryAutoSession();
+    document.documentElement.classList.remove("auth-pending");
+
     if (authed) {
-      $("authGate")?.classList.add("hidden");
-      $("authGate")?.setAttribute("aria-hidden", "true");
+      hideAuthGate();
       readyResolve?.({ ok: true, restored: true });
       return;
     }
 
+    $("authGate")?.classList.remove("hidden");
+    $("authGate")?.setAttribute("aria-hidden", "false");
     document.body.classList.add("auth-locked");
     document.documentElement.classList.add("auth-locked");
     window.I18n?.applyPageI18n?.();
