@@ -190,8 +190,18 @@ function findOrCreateOAuthUser(provider, providerId, email, name) {
   return authResponse(user);
 }
 
+function normalizeBotUsername(bot) {
+  return String(bot || "")
+    .trim()
+    .replace(/^@/, "")
+    .replace(/[^a-zA-Z0-9_]/g, "");
+}
+
 function telegramWidgetPage(bot, redirectUri) {
-  const safeBot = String(bot || "").replace(/[^a-zA-Z0-9_]/g, "");
+  const safeBot = normalizeBotUsername(bot);
+  if (!safeBot) {
+    return "<!DOCTYPE html><body><p>Bot username missing</p></body></html>";
+  }
   return `<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="UTF-8" />
@@ -227,7 +237,7 @@ function telegramWidgetPage(bot, redirectUri) {
 
 export function mountAuthRoutes(app) {
   app.get("/auth/telegram/page", (req, res) => {
-    const bot = req.query.bot;
+    const bot = normalizeBotUsername(req.query.bot);
     const redirectUri = req.query.redirect_uri;
     if (!bot || !redirectUri) {
       return res.status(400).send("bot and redirect_uri required");

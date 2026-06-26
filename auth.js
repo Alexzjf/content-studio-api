@@ -305,7 +305,9 @@
   }
 
   async function loginTelegram() {
-    const bot = globalThis.EXTENSION_CONFIG?.telegramBotUsername;
+    const bot = String(globalThis.EXTENSION_CONFIG?.telegramBotUsername || "")
+      .trim()
+      .replace(/^@/, "");
     if (!bot) throw new Error(t("authProviderNotConfigured"));
 
     const apiBase = crmApiBase();
