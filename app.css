@@ -1544,6 +1544,11 @@ body.mode-toolbar-popup .btn-reload {
   white-space: normal;
 }
 
+.msg-body strong {
+  font-weight: 800;
+  color: #fff;
+}
+
 .msg-body {
   white-space: pre-wrap;
   word-break: break-word;

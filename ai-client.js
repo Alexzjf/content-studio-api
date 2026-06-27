@@ -161,7 +161,12 @@ POST STRUCTURE:
 HARD RULES:
 - Use ONLY facts from the sources. Never invent quotes, numbers, or events.
 - Find the TOPIC (what the source is really about) — not the narrator's meta commentary.
-- For Twitter posts: output ONLY the post text (no "Here is your post:", no markdown, no bullet lists unless thread).
+- For Twitter posts: output ONLY the post text (no "Here is your post:").
+- FORMATTING (user copies verbatim into X — must paste 1:1):
+  • Bold key phrases: wrap ONLY emphasis words/phrases in **double asterisks** (hook words, stats, tool names).
+  • Use middle dot ⋅ to separate inline list items — NEVER use * or markdown bullets.
+  • Short line breaks between blocks (hook / body / punchline).
+  • NO other markdown. NO #hashtags unless the user explicitly asks.
 - Pick ONE angle — do NOT try to cover everything.
 - NEVER use generic filler: "це не магія, а техніка", "we just learned", "щойно ми дізнались", "важко повірити", "game-changer", vague lessons without specifics from sources.
 - Minimum ~120 characters unless user asked for micro — never a vague 2-sentence summary of the video intro.
@@ -1029,27 +1034,29 @@ async function chatWithSources(sources, settings, history, signal) {
   return ollamaChat(buildOpenAIMessages(systemText, history), settings, signal);
 }
 
-async function hostedDescribeVideo(framesBase64, settings) {
-  return hostedRequest("/v1/describe-video", { framesBase64, settings }, settings);
+async function hostedDescribeVideo(framesBase64, settings, batchPrompt) {
+  return hostedRequest(
+    "/v1/describe-video",
+    { framesBase64, settings, batchPrompt },
+    settings
+  );
 }
 
 const VIDEO_FRAMES_PROMPT =
-  "These images are frames sampled evenly from one video. Describe what happens visually: scenes, people, actions, on-screen text, UI, products, brands, mood. Be factual and specific. Combine into one coherent description (200-500 words). Same language as any visible text, otherwise Ukrainian or English.";
+  "These images are consecutive video frames (1 per second). Describe what happens visually: scenes, people, actions, on-screen text, UI, products, brands, mood. Be factual and concise (80-160 words). Same language as any visible text, otherwise Ukrainian or English.";
 
-async function describeVideoFrames(framesBase64, settings) {
-  const frames = (framesBase64 || []).filter(Boolean).slice(0, 8);
-  if (!frames.length) throw new Error("No video frames");
-
+async function describeVideoBatch(frames, settings, batchPrompt) {
+  const prompt = batchPrompt || VIDEO_FRAMES_PROMPT;
   const provider = settings.aiProvider || "hosted";
 
   if (provider === "hosted") {
-    return hostedDescribeVideo(frames, settings);
+    return hostedDescribeVideo(frames, settings, prompt);
   }
 
   if (provider === "gemini") {
     return geminiGenerate(settings, {
       userParts: [
-        { text: VIDEO_FRAMES_PROMPT },
+        { text: prompt },
         ...frames.map((data) => ({ inline_data: { mime_type: "image/jpeg", data } })),
       ],
     });
@@ -1060,7 +1067,7 @@ async function describeVideoFrames(framesBase64, settings) {
       {
         role: "user",
         content: [
-          { type: "text", text: VIDEO_FRAMES_PROMPT },
+          { type: "text", text: prompt },
           ...frames.map((data) => ({
             type: "image_url",
             image_url: { url: `data:image/jpeg;base64,${data}` },
@@ -1072,19 +1079,60 @@ async function describeVideoFrames(framesBase64, settings) {
 
   if (provider === "cursor") {
     return cursorAgentRequest(settings, {
-      systemText: VIDEO_FRAMES_PROMPT,
+      systemText: prompt,
       history: [],
-      images: frames.slice(0, 4),
+      images: frames.slice(0, 8),
     });
   }
 
   const parts = [];
-  for (let i = 0; i < Math.min(frames.length, 4); i++) {
+  for (let i = 0; i < Math.min(frames.length, 3); i++) {
     const chunk = await describeImage(frames[i], settings);
-    if (chunk?.trim()) parts.push(`Frame ${i + 1}: ${chunk.trim()}`);
+    if (chunk?.trim()) parts.push(chunk.trim());
   }
-  if (!parts.length) throw new Error("Video analysis failed");
-  return parts.join("\n\n");
+  return parts.join(" ");
+}
+
+async function mapConcurrent(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i], i);
+    }
+  }
+  const workers = Math.min(limit, items.length, 8);
+  await Promise.all(Array.from({ length: workers }, () => worker()));
+  return results;
+}
+
+async function describeVideoFrames(framesBase64, settings, frameMeta) {
+  const frames = (framesBase64 || []).filter(Boolean);
+  if (!frames.length) throw new Error("No video frames");
+
+  const BATCH = 12;
+  const batches = [];
+  for (let i = 0; i < frames.length; i += BATCH) {
+    batches.push(frames.slice(i, i + BATCH));
+  }
+
+  const meta = Array.isArray(frameMeta) ? frameMeta : null;
+  const summaries = await mapConcurrent(batches, 6, async (batch, batchIdx) => {
+    const startIdx = batchIdx * BATCH;
+    const startSec = meta?.[startIdx]?.second ?? startIdx;
+    const endSec = meta?.[startIdx + batch.length - 1]?.second ?? startSec + batch.length - 1;
+    const batchPrompt =
+      batch.length === 1
+        ? `Video frame at ${startSec}s. ${VIDEO_FRAMES_PROMPT}`
+        : `Video frames from ${startSec}s to ${endSec}s (1 frame per second). ${VIDEO_FRAMES_PROMPT}`;
+    const text = await describeVideoBatch(batch, settings, batchPrompt);
+    return String(text || "").trim();
+  });
+
+  const merged = summaries.filter(Boolean).join("\n\n");
+  if (!merged) throw new Error("Video analysis failed");
+  return merged;
 }
 
 async function describeImage(imageBase64, settings) {

@@ -1,4 +1,4 @@
-const APP_VERSION = "1.43.0";
+const APP_VERSION = "1.44.0";
 
 let chatStatusTicker = null;
 let hostedWarmAt = 0;
@@ -1435,39 +1435,29 @@ async function addMediaSource(file) {
   try {
     const settings = await getSettings();
     setStatus(t("processingFile", { name: file.name }));
-    setProgress(10);
+    setProgress(8);
 
     let transcript = "";
-    try {
-      const audio = await extractAudioFromFile(file, () => {});
-      setProgress(35);
-      if (audio?.length) {
-        setStatus(t("transcribing"));
-        const audioId = await AudioStore.put(audio);
-        const tr = await runtimeSend({
-          type: "TRANSCRIBE",
-          audioId,
-          language: settings.whisperLang,
-        });
-        if (tr?.error) throw new Error(tr.error);
-        if (tr?.text?.trim()) transcript = tr.text.trim();
-      }
-    } catch (err) {
-      if (!isVideo) throw err;
-    }
-
     let visualDesc = "";
-    if (isVideo && !transcript) {
-      setStatus(t("analyzingVideoVisual"));
-      setProgress(55);
-      await loadAiClientIfMissing();
-      const frames = await extractVideoFrames(file, 6);
-      setProgress(72);
-      setStatus(t("visionWorking", { provider: t("assistantLabel") }));
-      const describeVideo = getAiDescribeVideoFn();
-      if (typeof describeVideo !== "function") throw new Error(t("transcribeFailed"));
-      visualDesc = String(await describeVideo(frames, settings)).trim();
-      if (!visualDesc) throw new Error(t("transcribeFailed"));
+
+    if (isVideo) {
+      setStatus(t("analyzingVideoBoth"));
+      const [audioText, visualText] = await Promise.all([
+        transcribeMediaFile(file, settings).then((text) => {
+          setProgress(40);
+          return text;
+        }),
+        analyzeVideoVisual(file, settings).then((text) => {
+          setProgress(72);
+          return text;
+        }),
+      ]);
+      transcript = audioText;
+      visualDesc = visualText;
+    } else {
+      setStatus(t("transcribing"));
+      setProgress(35);
+      transcript = await transcribeMediaFile(file, settings);
     }
 
     if (!transcript && !visualDesc) throw new Error(t("transcribeFailed"));
@@ -1489,6 +1479,37 @@ async function addMediaSource(file) {
   } finally {
     setBusy(false);
     updateChatState();
+  }
+}
+
+async function transcribeMediaFile(file, settings) {
+  try {
+    const audio = await extractAudioFromFile(file, () => {});
+    if (!audio?.length) return "";
+    const audioId = await AudioStore.put(audio);
+    const tr = await runtimeSend({
+      type: "TRANSCRIBE",
+      audioId,
+      language: settings.whisperLang,
+    });
+    if (tr?.error) return "";
+    return tr?.text?.trim() || "";
+  } catch {
+    return "";
+  }
+}
+
+async function analyzeVideoVisual(file, settings) {
+  try {
+    await loadAiClientIfMissing();
+    const frameData = await globalThis.extractVideoFramesPerSecond?.(file);
+    if (!frameData?.length) return "";
+    const describeVideo = getAiDescribeVideoFn();
+    if (typeof describeVideo !== "function") return "";
+    const frames = frameData.map((f) => f.base64);
+    return String(await describeVideo(frames, settings, frameData)).trim();
+  } catch {
+    return "";
   }
 }
 
@@ -1842,7 +1863,11 @@ function appendMessage(role, text, options = {}) {
   if (role === "assistant") {
     const body = document.createElement("div");
     body.className = "msg-body";
-    body.textContent = text;
+    if (globalThis.PostFormat?.renderPostHtml) {
+      body.innerHTML = globalThis.PostFormat.renderPostHtml(text);
+    } else {
+      body.textContent = text;
+    }
 
     const actions = document.createElement("div");
     actions.className = "msg-actions";
@@ -1999,6 +2024,9 @@ function extractPostText(text) {
   out = out.replace(/^```[\w]*\n?/, "").replace(/\n?```$/, "");
   out = out.replace(/^(here(?:'s| is) your post:?\s*)/i, "");
   out = out.replace(/^(ось (твій |ваш )?пост:?\s*)/i, "");
+  if (globalThis.PostFormat?.normalizeBullets) {
+    out = globalThis.PostFormat.normalizeBullets(out);
+  }
   return out.trim();
 }
 
@@ -2189,6 +2217,7 @@ Include tool names, steps, and claims FROM the sources.
 ${postLengthInstruction(settings)}
 ${min >= 500 ? `CRITICAL: output MUST be at least ${min} characters. Do not stop early.` : ""}
 ${postLangInstruction(settings)}
+Formatting: **bold** key phrases only; separate list items with ⋅ (not *). User copies verbatim into X.
 Post text only — no title, no "here is your post".`;
 }
 
@@ -2388,7 +2417,10 @@ function getTextForInsert() {
   for (let i = chatHistory.length - 1; i >= 0; i--) {
     if (chatHistory[i]?.role === "assistant") {
       const content = chatHistory[i].content;
-      if (content != null && String(content).trim()) return String(content);
+      if (content != null && String(content).trim()) {
+        const raw = String(content);
+        return globalThis.PostFormat?.formatPostForX?.(raw) || raw;
+      }
     }
   }
 
@@ -2433,7 +2465,9 @@ function flashActionStatus(text, type = "success") {
 }
 
 async function copyMessageText(text, btn) {
-  const ok = await copyTextToClipboard(text);
+  const ok = globalThis.PostFormat?.copyPostToClipboard
+    ? await globalThis.PostFormat.copyPostToClipboard(text)
+    : await copyTextToClipboard(text);
   if (!ok) {
     flashActionStatus(t("copyFailed"), "error");
     return;

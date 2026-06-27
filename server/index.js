@@ -92,7 +92,7 @@ function authMiddleware(req, res, next) {
   next();
 }
 
-const API_VERSION = "1.43.0";
+const API_VERSION = "1.44.0";
 const INTERNAL_RETRY_MS = Number(process.env.INTERNAL_RETRY_MS || 90000);
 const KEY_COOLDOWN_MS = Number(process.env.KEY_COOLDOWN_MS || 30000);
 
@@ -209,18 +209,18 @@ app.post("/v1/chat", authMiddleware, async (req, res) => {
 
 app.post("/v1/describe-video", authMiddleware, async (req, res) => {
   try {
-    const { framesBase64, settings = {} } = req.body || {};
-    const frames = Array.isArray(framesBase64) ? framesBase64.filter(Boolean).slice(0, 8) : [];
+    const { framesBase64, settings = {}, batchPrompt } = req.body || {};
+    const frames = Array.isArray(framesBase64) ? framesBase64.filter(Boolean).slice(0, 16) : [];
     if (!frames.length) {
       return res.status(400).json({ error: "framesBase64 required" });
     }
     const text = await generateWithKeyRotation({
       model: settings.geminiModel || DEFAULT_MODEL,
       userParts: [
-        { text: VIDEO_FRAMES_PROMPT },
+        { text: batchPrompt || VIDEO_FRAMES_PROMPT },
         ...frames.map((data) => ({ inline_data: { mime_type: "image/jpeg", data } })),
       ],
-      temperature: 0.4,
+      temperature: 0.35,
     });
     res.json({ text });
   } catch (err) {

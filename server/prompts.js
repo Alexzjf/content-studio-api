@@ -251,7 +251,12 @@ POST STRUCTURE:
 HARD RULES:
 - Use ONLY facts from the sources. Never invent quotes, numbers, or events.
 - Find the TOPIC (what the source is really about) — not the narrator's meta commentary.
-- For Twitter posts: output ONLY the post text (no "Here is your post:", no markdown, no bullet lists unless thread).
+- For Twitter posts: output ONLY the post text (no "Here is your post:").
+- FORMATTING (user copies verbatim into X — must paste 1:1):
+  • Bold key phrases: wrap ONLY emphasis words/phrases in **double asterisks** (hook words, stats, tool names).
+  • Use middle dot ⋅ to separate inline list items — NEVER use * or markdown bullets.
+  • Short line breaks between blocks (hook / body / punchline).
+  • NO other markdown. NO #hashtags unless the user explicitly asks.
 - Pick ONE angle — do NOT try to cover everything.
 - NEVER use generic filler: "це не магія, а техніка", "we just learned", "щойно ми дізнались", "важко повірити", "game-changer", vague lessons without specifics from sources.
 - Minimum ~120 characters unless user asked for micro — never a vague 2-sentence summary of the video intro.
