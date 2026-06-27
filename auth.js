@@ -421,6 +421,57 @@
     }
   }
 
+  function isToolbarPopup() {
+    return window.AppChrome?.isToolbarPopup?.() === true;
+  }
+
+  async function handoffAuthToWindow(pendingAction) {
+    if (!isToolbarPopup()) return false;
+
+    showError("");
+    showViewStatus(t("authPopupHandoff"));
+
+    const qs = new URLSearchParams({ window: "1", pendingAuth: pendingAction });
+    if (isRegisterMode) qs.set("register", "1");
+
+    try {
+      await chrome.windows.create({
+        url: chrome.runtime.getURL(`app.html?${qs}`),
+        type: "normal",
+        focused: true,
+        width: 440,
+        height: 720,
+      });
+    } catch (err) {
+      showViewStatus(err.message || t("authViewFailed"), true);
+      return true;
+    }
+
+    setTimeout(() => window.close(), 220);
+    return true;
+  }
+
+  async function runPendingAuthAction() {
+    const params = new URLSearchParams(location.search);
+    const pending = params.get("pendingAuth");
+    if (!pending) return;
+
+    if (params.get("register") === "1") setRegisterMode(true);
+
+    await new Promise((r) => setTimeout(r, 420));
+    setBusy(true);
+    showError("");
+    try {
+      if (pending === "google") await loginGoogle();
+      else if (pending === "telegram") await loginTelegram();
+      else if (pending === "x") await loginX();
+    } catch (err) {
+      showError(err.message || t("authFailed"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function bindForm() {
     $("authToggleModeBtn")?.addEventListener("click", () => setRegisterMode(!isRegisterMode));
 
@@ -447,6 +498,8 @@
         setBusy(true);
         showError("");
         try {
+          const action = id.replace("auth", "").replace("Btn", "").toLowerCase();
+          if (await handoffAuthToWindow(action)) return;
           await fn();
         } catch (err) {
           showError(err.message || t("authFailed"));
@@ -496,7 +549,9 @@
     $("authGate")?.setAttribute("aria-hidden", "false");
     document.body.classList.add("auth-locked");
     document.documentElement.classList.add("auth-locked");
+    if (isToolbarPopup()) $("authPopupHint")?.classList.remove("hidden");
     window.I18n?.applyPageI18n?.();
+    void runPendingAuthAction();
   }
 
   async function forceLogout() {

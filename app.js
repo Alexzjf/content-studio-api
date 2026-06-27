@@ -1,4 +1,4 @@
-const APP_VERSION = "1.42.0";
+const APP_VERSION = "1.43.0";
 
 let chatStatusTicker = null;
 let hostedWarmAt = 0;
@@ -61,6 +61,11 @@ let isBusy = false;
 let activeChatAbort = null;
 let chatOpGen = 0;
 const CHAT_HISTORY_KEY = "chatHistorySnapshot";
+const CHAT_SESSIONS_KEY = "chatSessionsV1";
+const CURRENT_CHAT_SESSION_KEY = "currentChatSessionId";
+const MAX_CHAT_SESSIONS = 40;
+let chatSessions = [];
+let currentSessionId = null;
 let sourceIdCounter = 0;
 let uiLang = "en";
 let ownApiKeysCache = {};
@@ -451,6 +456,27 @@ function getAiDescribeFn() {
   return globalThis.describeImage || (typeof window !== "undefined" ? window.describeImage : undefined);
 }
 
+function getAiDescribeVideoFn() {
+  return globalThis.describeVideoFrames || (typeof window !== "undefined" ? window.describeVideoFrames : undefined);
+}
+
+function postLangInstruction(settings) {
+  return globalThis.PromptHints?.languageHint?.(settings?.postLang) || "";
+}
+
+function populatePostLangSelect() {
+  const sel = $("postLang");
+  if (!sel) return;
+  const saved = sel.value;
+  const options = window.I18n?.UI_LANG_OPTIONS || [];
+  sel.innerHTML =
+    `<option value="auto">${escapeHtml(t("postLangAuto"))}</option>` +
+    options
+      .map((o) => `<option value="${escapeHtml(o.code)}">${escapeHtml(o.label)}</option>`)
+      .join("");
+  if (saved) sel.value = saved;
+}
+
 function extensionScriptUrl(name) {
   if (typeof chrome?.runtime?.getURL === "function") {
     return chrome.runtime.getURL(name);
@@ -747,6 +773,8 @@ async function setUiLang(lang, persist = true) {
     document.title = `${I18n.t("brandTitle")}`;
   }
 
+  populatePostLangSelect();
+
   updateAiMode();
   populateOwnProviderSelect();
   renderSources();
@@ -818,6 +846,7 @@ async function loadSettings() {
 
   setSelectValue("whisperLang", settings.whisperLang ?? DEFAULT_SETTINGS.whisperLang);
   setSelectValue("settingsUiLang", uiLang);
+  populatePostLangSelect();
   setSelectValue(
     "postLang",
     settings.postLang ?? (uiLang === "uk" ? "uk" : DEFAULT_SETTINGS.postLang)
@@ -1210,6 +1239,8 @@ function bindEvents() {
   });
   $("testApiBtn")?.addEventListener("click", () => void testOwnApi());
 
+  $("newChatSessionBtn")?.addEventListener("click", () => void startNewChatSession());
+
   $("mediaInput")?.addEventListener("change", (e) => {
     const file = e.target.files[0];
     if (file) addMediaSource(file);
@@ -1406,20 +1437,45 @@ async function addMediaSource(file) {
     setStatus(t("processingFile", { name: file.name }));
     setProgress(10);
 
-    const audio = await extractAudioFromFile(file, () => {});
-    setProgress(40);
-    setStatus(t("transcribing"));
+    let transcript = "";
+    try {
+      const audio = await extractAudioFromFile(file, () => {});
+      setProgress(35);
+      if (audio?.length) {
+        setStatus(t("transcribing"));
+        const audioId = await AudioStore.put(audio);
+        const tr = await runtimeSend({
+          type: "TRANSCRIBE",
+          audioId,
+          language: settings.whisperLang,
+        });
+        if (tr?.error) throw new Error(tr.error);
+        if (tr?.text?.trim()) transcript = tr.text.trim();
+      }
+    } catch (err) {
+      if (!isVideo) throw err;
+    }
 
-    const audioId = await AudioStore.put(audio);
-    const tr = await runtimeSend({
-      type: "TRANSCRIBE",
-      audioId,
-      language: settings.whisperLang,
-    });
-    if (tr?.error) throw new Error(tr.error);
-    if (!tr?.text?.trim()) throw new Error(t("transcribeFailed"));
+    let visualDesc = "";
+    if (isVideo && !transcript) {
+      setStatus(t("analyzingVideoVisual"));
+      setProgress(55);
+      await loadAiClientIfMissing();
+      const frames = await extractVideoFrames(file, 6);
+      setProgress(72);
+      setStatus(t("visionWorking", { provider: t("assistantLabel") }));
+      const describeVideo = getAiDescribeVideoFn();
+      if (typeof describeVideo !== "function") throw new Error(t("transcribeFailed"));
+      visualDesc = String(await describeVideo(frames, settings)).trim();
+      if (!visualDesc) throw new Error(t("transcribeFailed"));
+    }
 
-    src.content = tr.text.trim();
+    if (!transcript && !visualDesc) throw new Error(t("transcribeFailed"));
+
+    const parts = [];
+    if (visualDesc) parts.push(`${t("videoVisualPrefix")}\n${visualDesc}`);
+    if (transcript) parts.push(`${t("videoAudioPrefix")}\n${transcript}`);
+    src.content = parts.join("\n\n");
     src.status = "ready";
     renderSources();
     setProgress(100);
@@ -1589,6 +1645,184 @@ function updateChatState() {
   }
 }
 
+function renderChatMessagesFromHistory() {
+  const box = $("chatMessages");
+  if (!box) return;
+  box.innerHTML = "";
+  if (!chatHistory.length) {
+    renderChatEmpty();
+    return;
+  }
+  for (const msg of chatHistory) {
+    appendMessage(msg.role === "assistant" ? "assistant" : "user", msg.content, { syncOnly: true });
+  }
+}
+
+function newChatSessionId() {
+  return `chat_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function getCurrentChatSession() {
+  return chatSessions.find((s) => s.id === currentSessionId) || null;
+}
+
+function sessionTitleFromMessages(messages) {
+  const firstUser = messages.find((m) => m.role === "user" && m.content?.trim());
+  if (!firstUser) return t("chatHistoryUntitled");
+  const text = String(firstUser.content).replace(/\s+/g, " ").trim();
+  return text.length > 56 ? `${text.slice(0, 56)}…` : text;
+}
+
+function syncCurrentChatSession() {
+  if (!currentSessionId) return;
+  let session = getCurrentChatSession();
+  if (!session) {
+    session = {
+      id: currentSessionId,
+      title: "",
+      messages: [],
+      updatedAt: Date.now(),
+      createdAt: Date.now(),
+    };
+    chatSessions.unshift(session);
+  }
+  session.messages = chatHistory.map((m) => ({ role: m.role, content: m.content }));
+  session.updatedAt = Date.now();
+  if (chatHistory.length) {
+    session.title = sessionTitleFromMessages(chatHistory);
+  }
+}
+
+async function loadChatSessionsStore() {
+  try {
+    const stored = await chrome.storage.local.get([CHAT_SESSIONS_KEY, CURRENT_CHAT_SESSION_KEY]);
+    chatSessions = Array.isArray(stored[CHAT_SESSIONS_KEY]) ? stored[CHAT_SESSIONS_KEY] : [];
+    currentSessionId = stored[CURRENT_CHAT_SESSION_KEY] || null;
+  } catch {
+    chatSessions = [];
+    currentSessionId = null;
+  }
+}
+
+async function saveChatSessionsStore() {
+  try {
+    await chrome.storage.local.set({
+      [CHAT_SESSIONS_KEY]: chatSessions.slice(0, MAX_CHAT_SESSIONS),
+      [CURRENT_CHAT_SESSION_KEY]: currentSessionId,
+    });
+  } catch (_) {}
+}
+
+function ensureCurrentChatSession() {
+  if (currentSessionId && getCurrentChatSession()) return;
+  const id = newChatSessionId();
+  chatSessions.unshift({
+    id,
+    title: "",
+    messages: [],
+    updatedAt: Date.now(),
+    createdAt: Date.now(),
+  });
+  currentSessionId = id;
+  if (chatSessions.length > MAX_CHAT_SESSIONS) {
+    chatSessions = chatSessions.slice(0, MAX_CHAT_SESSIONS);
+  }
+}
+
+function renderChatSessionsList() {
+  const list = $("chatSessionsList");
+  if (!list) return;
+
+  if (!chatSessions.length) {
+    list.innerHTML = `<p class="chat-sessions-empty">${escapeHtml(t("chatHistoryEmpty"))}</p>`;
+    return;
+  }
+
+  const sorted = [...chatSessions].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  list.innerHTML = sorted
+    .map((session) => {
+      const active = session.id === currentSessionId ? " active" : "";
+      const title = escapeHtml(session.title || t("chatHistoryUntitled"));
+      const count = Array.isArray(session.messages) ? session.messages.length : 0;
+      const when = session.updatedAt
+        ? new Date(session.updatedAt).toLocaleString(undefined, {
+            month: "short",
+            day: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+          })
+        : "";
+      return `
+        <div class="chat-session-item${active}" data-session-id="${escapeHtml(session.id)}">
+          <button type="button" class="chat-session-body" data-open-session="${escapeHtml(session.id)}">
+            <span class="chat-session-title">${title}</span>
+            <span class="chat-session-meta">${escapeHtml(t("chatHistoryMessages", { count }))}${when ? ` · ${escapeHtml(when)}` : ""}</span>
+          </button>
+          <button type="button" class="chat-session-delete" data-delete-session="${escapeHtml(session.id)}" title="${escapeHtml(t("remove"))}">×</button>
+        </div>`;
+    })
+    .join("");
+
+  list.querySelectorAll("[data-open-session]").forEach((btn) => {
+    btn.addEventListener("click", () => void openChatSession(btn.dataset.openSession));
+  });
+  list.querySelectorAll("[data-delete-session]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      void deleteChatSession(btn.dataset.deleteSession);
+    });
+  });
+}
+
+async function openChatSession(id) {
+  if (!id || id === currentSessionId) return;
+  syncCurrentChatSession();
+  const session = chatSessions.find((s) => s.id === id);
+  if (!session) return;
+  currentSessionId = id;
+  chatHistory = Array.isArray(session.messages)
+    ? session.messages.filter((m) => m?.role && m?.content)
+    : [];
+  globalThis.resetCursorChatSession?.();
+  renderChatMessagesFromHistory();
+  await persistChatHistory();
+  updateChatState();
+}
+
+async function startNewChatSession() {
+  syncCurrentChatSession();
+  const id = newChatSessionId();
+  chatSessions.unshift({
+    id,
+    title: "",
+    messages: [],
+    updatedAt: Date.now(),
+    createdAt: Date.now(),
+  });
+  currentSessionId = id;
+  if (chatSessions.length > MAX_CHAT_SESSIONS) {
+    chatSessions = chatSessions.slice(0, MAX_CHAT_SESSIONS);
+  }
+  chatHistory = [];
+  globalThis.resetCursorChatSession?.();
+  renderChatMessagesFromHistory();
+  await persistChatHistory();
+  updateChatState();
+}
+
+async function deleteChatSession(id) {
+  chatSessions = chatSessions.filter((s) => s.id !== id);
+  if (currentSessionId === id) {
+    currentSessionId = null;
+    chatHistory = [];
+    globalThis.resetCursorChatSession?.();
+    ensureCurrentChatSession();
+    renderChatMessagesFromHistory();
+  }
+  await persistChatHistory();
+  updateChatState();
+}
+
 function renderChatEmpty() {
   $("chatMessages").innerHTML = `
     <div class="chat-empty">
@@ -1597,7 +1831,7 @@ function renderChatEmpty() {
     </div>`;
 }
 
-function appendMessage(role, text) {
+function appendMessage(role, text, options = {}) {
   const empty = $("chatMessages").querySelector(".chat-empty");
   if (empty) empty.remove();
 
@@ -1626,28 +1860,50 @@ function appendMessage(role, text) {
   }
 
   $("chatMessages").appendChild(div);
-  $("chatMessages").scrollTop = $("chatMessages").scrollHeight;
+  if (!options.syncOnly) {
+    $("chatMessages").scrollTop = $("chatMessages").scrollHeight;
+  }
 }
 
 async function persistChatHistory() {
+  ensureCurrentChatSession();
+  syncCurrentChatSession();
+  await saveChatSessionsStore();
+  renderChatSessionsList();
   try {
     await chrome.storage.session.set({ [CHAT_HISTORY_KEY]: chatHistory });
   } catch (_) {}
 }
 
 async function restoreChatHistory() {
+  await loadChatSessionsStore();
+
+  if (currentSessionId) {
+    const session = getCurrentChatSession();
+    if (session?.messages?.length) {
+      chatHistory = session.messages.filter((m) => m?.role && m?.content);
+      renderChatMessagesFromHistory();
+      renderChatSessionsList();
+      return;
+    }
+  }
+
   try {
     const stored = await chrome.storage.session.get(CHAT_HISTORY_KEY);
     const saved = stored?.[CHAT_HISTORY_KEY];
-    if (!Array.isArray(saved) || !saved.length) return;
-    chatHistory = saved.filter((m) => m?.role && m?.content);
-    const box = $("chatMessages");
-    if (!box) return;
-    box.innerHTML = "";
-    for (const msg of chatHistory) {
-      appendMessage(msg.role === "assistant" ? "assistant" : "user", msg.content);
+    if (Array.isArray(saved) && saved.length) {
+      chatHistory = saved.filter((m) => m?.role && m?.content);
+      ensureCurrentChatSession();
+      syncCurrentChatSession();
+      renderChatMessagesFromHistory();
+      await saveChatSessionsStore();
+      renderChatSessionsList();
+      return;
     }
   } catch (_) {}
+
+  ensureCurrentChatSession();
+  renderChatSessionsList();
 }
 
 function isChatAbortedError(err) {
@@ -1899,7 +2155,7 @@ async function expandExistingPost(settings, userPrompt, signal) {
 
 Expand into a LONGER ready-to-publish X post. MINIMUM ${minLen} characters — count before finishing.
 Keep the same angle as the current draft. Add steps, tool names, and specifics from video sources.
-${settings.postLang === "uk" ? "Ukrainian." : settings.postLang === "en" ? "English." : "Match user language."}
+${postLangInstruction(settings)}
 Post text only.`;
 
   return extractPostText(
@@ -1927,12 +2183,12 @@ function buildVideoPostPrompt(userPrompt, settings) {
   const min = settings.minPostChars || 0;
   return `${userPrompt}
 
-Read the video transcript in SOURCES. Skip empty intro hooks ("stupid way", narrator fluff).
+Read the video source in SOURCES (speech transcript and/or visual description). Skip empty intro hooks ("stupid way", narrator fluff).
 Write as the USER (creator on X), not the video narrator.
-Include tool names, steps, and claims FROM the transcript.
+Include tool names, steps, and claims FROM the sources.
 ${postLengthInstruction(settings)}
 ${min >= 500 ? `CRITICAL: output MUST be at least ${min} characters. Do not stop early.` : ""}
-${settings.postLang === "uk" ? "Ukrainian." : settings.postLang === "en" ? "English." : "Match user language."}
+${postLangInstruction(settings)}
 Post text only — no title, no "here is your post".`;
 }
 
@@ -2001,6 +2257,7 @@ async function sendChatMessage(text, options = {}) {
   if (options.fresh) {
     chatHistory = [];
     globalThis.resetCursorChatSession?.();
+    syncCurrentChatSession();
     void persistChatHistory();
   }
 

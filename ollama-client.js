@@ -25,9 +25,7 @@ const POST_STYLE_HINTS = {
 };
 
 function languageHint(postLang) {
-  if (postLang === "en") return "Write in English unless the user asks otherwise.";
-  if (postLang === "uk") return "Пиши українською, якщо користувач не просить іншу мову.";
-  return "Match the language of the sources or the user's message.";
+  return globalThis.PromptHints?.languageHint?.(postLang) || "Match the language of the sources or the user's message.";
 }
 
 function styleHint(postStyle) {

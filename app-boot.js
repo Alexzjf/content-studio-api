@@ -720,6 +720,7 @@
     openFullscreenTab,
     applyPanelWidth,
     getSurfaceMode: () => surfaceMode,
+    isToolbarPopup,
     openAppSettingsDialog,
     syncAppSettingsLang,
   };

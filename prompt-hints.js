@@ -51,10 +51,28 @@ const PERSPECTIVE_HINTS = {
   third: "Perspective: neutral third person — no I/you unless quoting sources.",
 };
 
+const POST_LANG_NAMES = {
+  uk: "Ukrainian",
+  en: "English",
+  ru: "Russian",
+  de: "German",
+  es: "Spanish",
+  fr: "French",
+  pl: "Polish",
+  pt: "Portuguese",
+  it: "Italian",
+  tr: "Turkish",
+  zh: "Chinese",
+  ja: "Japanese",
+  ko: "Korean",
+};
+
 function languageHint(postLang) {
-  if (postLang === "en") return "Write in English unless the user asks otherwise.";
-  if (postLang === "uk") return "Пиши українською, якщо користувач не просить іншу мову.";
-  return "Match the language of the sources or the user's message.";
+  if (!postLang || postLang === "auto") {
+    return "Match the language of the sources or the user's message.";
+  }
+  const name = POST_LANG_NAMES[postLang] || postLang;
+  return `Write ALL X/Twitter posts and post-style replies in ${name}. Do not switch language unless the user explicitly asks.`;
 }
 
 function styleHint(postStyle) {

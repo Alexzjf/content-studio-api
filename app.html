@@ -127,6 +127,16 @@ body.mode-auth-page {
         <div id="status" class="status hidden"></div>
         <progress id="progress" class="hidden" max="100" value="0"></progress>
       </section>
+
+      <section class="panel chat-sessions-panel">
+        <div class="panel-head">
+          <h2 data-i18n="chatHistory">Chat history</h2>
+          <button type="button" id="newChatSessionBtn" class="btn btn-ghost btn-sm chat-session-new" data-i18n-title="chatHistoryNew" title="New chat">+</button>
+        </div>
+        <div id="chatSessionsList" class="chat-sessions-list">
+          <p class="chat-sessions-empty" data-i18n="chatHistoryEmpty">No chats yet</p>
+        </div>
+      </section>
     </aside>
 
     <main class="workspace">
@@ -202,6 +212,7 @@ body.mode-auth-page {
           </button>
         </div>
         <p id="authViewStatus" class="auth-view-status hidden" aria-live="polite"></p>
+        <p id="authPopupHint" class="auth-popup-hint hidden" data-i18n="authPopupHint">Google, Telegram and X open in a separate window so sign-in does not close this panel.</p>
       </div>
 
       <div id="authSocialBlock" class="auth-social-block">
@@ -434,12 +445,9 @@ body.mode-auth-page {
               </select>
             </label>
             <label class="field">
-              <span data-i18n="postLang">Response language</span>
-              <select id="postLang">
-                <option value="auto" data-i18n="postLangAuto">Auto</option>
-                <option value="en" data-i18n="postLangEn">English</option>
-                <option value="uk" data-i18n="postLangUk">Ukrainian</option>
-              </select>
+              <span data-i18n="postLang">Post language</span>
+              <select id="postLang"></select>
+              <p class="field-hint" data-i18n="postLangHint">Language for generated X posts when you ask to write a post.</p>
             </label>
           </div>
           <label class="field">
@@ -530,6 +538,7 @@ body.mode-auth-page {
   <script src="extension-runtime.js"></script>
   <script src="panel-config.js"></script>
   <script src="i18n.js"></script>
+  <script src="video-frames.js"></script>
   <script src="audio-store.js"></script>
   <script src="transcript-utils.js"></script>
   <script src="prompt-hints.js" data-csx-ai="prompt-hints.js"></script>

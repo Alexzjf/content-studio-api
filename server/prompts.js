@@ -50,10 +50,28 @@ const PERSPECTIVE_HINTS = {
   third: "Perspective: neutral third person — no I/you unless quoting sources.",
 };
 
+const POST_LANG_NAMES = {
+  uk: "Ukrainian",
+  en: "English",
+  ru: "Russian",
+  de: "German",
+  es: "Spanish",
+  fr: "French",
+  pl: "Polish",
+  pt: "Portuguese",
+  it: "Italian",
+  tr: "Turkish",
+  zh: "Chinese",
+  ja: "Japanese",
+  ko: "Korean",
+};
+
 function languageHint(postLang) {
-  if (postLang === "en") return "Write in English unless the user asks otherwise.";
-  if (postLang === "uk") return "Пиши українською, якщо користувач не просить іншу мову.";
-  return "Match the language of the sources or the user's message.";
+  if (!postLang || postLang === "auto") {
+    return "Match the language of the sources or the user's message.";
+  }
+  const name = POST_LANG_NAMES[postLang] || postLang;
+  return `Write ALL X/Twitter posts and post-style replies in ${name}. Do not switch language unless the user explicitly asks.`;
 }
 
 function styleHint(postStyle) {
@@ -210,7 +228,7 @@ YOUR JOB:
 - Do NOT write a Twitter/X post unless the user explicitly asks for one.
 - ${languageHint(settings.postLang)}
 
-VIDEO/AUDIO NOTE: transcripts come from Whisper speech recognition — they are the spoken content of the file, not a visual description of frames.
+VIDEO/AUDIO NOTE: sources may include speech transcripts (Whisper) and/or [Visual description] from sampled video frames when there is no audio.
 ${customRulesBlock(settings)}
 SOURCES:
 ${formatSourcesBlock(sources, "qa")}`;
@@ -270,3 +288,6 @@ export function buildSystemPrompt(sources, settings = {}) {
 
 export const IMAGE_PROMPT =
   "Describe this image in detail for a social media writer. Include: what is shown, visible text, brands/logos, UI, people and actions, mood. Be factual, 150-400 words. Same language as any text in the image, otherwise English or Ukrainian.";
+
+export const VIDEO_FRAMES_PROMPT =
+  "These images are frames sampled evenly from one video. Describe what happens visually: scenes, people, actions, on-screen text, UI, products, brands, mood. Be factual and specific. Combine into one coherent description (200-500 words). Same language as any visible text, otherwise English or Ukrainian.";

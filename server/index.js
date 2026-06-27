@@ -3,7 +3,7 @@ import { mountAuthRoutes, ensureTelegramWebhook } from "./auth.js";
 import { readFileSync, existsSync } from "fs";
 import { geminiGenerate } from "./gemini.js";
 import { createKeyPool, parseApiKeys } from "./key-pool.js";
-import { buildSystemPrompt, IMAGE_PROMPT } from "./prompts.js";
+import { buildSystemPrompt, IMAGE_PROMPT, VIDEO_FRAMES_PROMPT } from "./prompts.js";
 
 function loadEnvFile() {
   const path = new URL(".env", import.meta.url).pathname;
@@ -92,7 +92,7 @@ function authMiddleware(req, res, next) {
   next();
 }
 
-const API_VERSION = "1.42.8";
+const API_VERSION = "1.43.0";
 const INTERNAL_RETRY_MS = Number(process.env.INTERNAL_RETRY_MS || 90000);
 const KEY_COOLDOWN_MS = Number(process.env.KEY_COOLDOWN_MS || 30000);
 
@@ -190,6 +190,37 @@ app.post("/v1/chat", authMiddleware, async (req, res) => {
       history: trimmedHistory,
       temperature: settings.temperature ?? 0.75,
       maxOutputTokens: settings.maxOutputTokens,
+    });
+    res.json({ text });
+  } catch (err) {
+    if (err.code === "RATE_LIMIT") {
+      return res.status(429).json({
+        error: err.message,
+        retryAfterSec: err.retryAfterSec || 3,
+      });
+    }
+    const msg = err.message || "AI error";
+    if (/тимчасово зайнятий|high demand|overloaded|quota|rate limit/i.test(msg)) {
+      return res.status(429).json({ error: msg, retryAfterSec: 3 });
+    }
+    res.status(502).json({ error: msg });
+  }
+});
+
+app.post("/v1/describe-video", authMiddleware, async (req, res) => {
+  try {
+    const { framesBase64, settings = {} } = req.body || {};
+    const frames = Array.isArray(framesBase64) ? framesBase64.filter(Boolean).slice(0, 8) : [];
+    if (!frames.length) {
+      return res.status(400).json({ error: "framesBase64 required" });
+    }
+    const text = await generateWithKeyRotation({
+      model: settings.geminiModel || DEFAULT_MODEL,
+      userParts: [
+        { text: VIDEO_FRAMES_PROMPT },
+        ...frames.map((data) => ({ inline_data: { mime_type: "image/jpeg", data } })),
+      ],
+      temperature: 0.4,
     });
     res.json({ text });
   } catch (err) {

@@ -767,6 +767,106 @@ body.mode-standalone-window .draft-panel textarea {
   background: linear-gradient(180deg, rgba(12, 12, 14, 0.92), rgba(10, 10, 12, 0.96));
   scrollbar-width: thin;
   scrollbar-color: var(--border-strong) transparent;
+  display: flex;
+  flex-direction: column;
+}
+
+.sources-panel {
+  flex-shrink: 0;
+}
+
+.chat-sessions-panel {
+  flex: 1;
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 0;
+}
+
+.chat-sessions-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.chat-sessions-empty {
+  margin: 0;
+  padding: 8px 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.chat-session-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.chat-session-item:hover {
+  border-color: var(--border-strong);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.chat-session-item.active {
+  border-color: rgba(96, 165, 250, 0.45);
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.chat-session-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-session-title {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-session-meta {
+  display: block;
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.chat-session-delete {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  line-height: 1;
+}
+
+.chat-session-delete:hover {
+  color: var(--error);
+  background: rgba(239, 68, 68, 0.12);
+}
+
+body.mode-toolbar-popup .chat-sessions-panel {
+  display: none;
 }
 
 .sidebar::-webkit-scrollbar,
@@ -2294,6 +2394,22 @@ body.auth-unlocking #headerStatus {
 }
 
 .auth-view-status.hidden {
+  display: none;
+}
+
+.auth-popup-hint {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 11px;
+  line-height: 1.45;
+  text-align: center;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.auth-popup-hint.hidden {
   display: none;
 }
 

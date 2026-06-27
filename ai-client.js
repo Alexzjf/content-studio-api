@@ -138,7 +138,7 @@ YOUR JOB:
 - Do NOT write a Twitter/X post unless the user explicitly asks for one.
 - ${languageHint(settings.postLang)}
 
-VIDEO/AUDIO NOTE: transcripts come from Whisper speech recognition — they are the spoken content of the file, not a visual description of frames.
+VIDEO/AUDIO NOTE: sources may include speech transcripts (Whisper) and/or [Visual description] from sampled video frames when there is no audio.
 ${customRulesBlock(settings)}
 SOURCES:
 ${formatSourcesBlock(sources, "qa")}`;
@@ -1029,6 +1029,64 @@ async function chatWithSources(sources, settings, history, signal) {
   return ollamaChat(buildOpenAIMessages(systemText, history), settings, signal);
 }
 
+async function hostedDescribeVideo(framesBase64, settings) {
+  return hostedRequest("/v1/describe-video", { framesBase64, settings }, settings);
+}
+
+const VIDEO_FRAMES_PROMPT =
+  "These images are frames sampled evenly from one video. Describe what happens visually: scenes, people, actions, on-screen text, UI, products, brands, mood. Be factual and specific. Combine into one coherent description (200-500 words). Same language as any visible text, otherwise Ukrainian or English.";
+
+async function describeVideoFrames(framesBase64, settings) {
+  const frames = (framesBase64 || []).filter(Boolean).slice(0, 8);
+  if (!frames.length) throw new Error("No video frames");
+
+  const provider = settings.aiProvider || "hosted";
+
+  if (provider === "hosted") {
+    return hostedDescribeVideo(frames, settings);
+  }
+
+  if (provider === "gemini") {
+    return geminiGenerate(settings, {
+      userParts: [
+        { text: VIDEO_FRAMES_PROMPT },
+        ...frames.map((data) => ({ inline_data: { mime_type: "image/jpeg", data } })),
+      ],
+    });
+  }
+
+  if (provider === "openrouter") {
+    return openrouterChat(settings, [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: VIDEO_FRAMES_PROMPT },
+          ...frames.map((data) => ({
+            type: "image_url",
+            image_url: { url: `data:image/jpeg;base64,${data}` },
+          })),
+        ],
+      },
+    ]);
+  }
+
+  if (provider === "cursor") {
+    return cursorAgentRequest(settings, {
+      systemText: VIDEO_FRAMES_PROMPT,
+      history: [],
+      images: frames.slice(0, 4),
+    });
+  }
+
+  const parts = [];
+  for (let i = 0; i < Math.min(frames.length, 4); i++) {
+    const chunk = await describeImage(frames[i], settings);
+    if (chunk?.trim()) parts.push(`Frame ${i + 1}: ${chunk.trim()}`);
+  }
+  if (!parts.length) throw new Error("Video analysis failed");
+  return parts.join("\n\n");
+}
+
 async function describeImage(imageBase64, settings) {
   const provider = settings.aiProvider || "hosted";
   const prompt =
@@ -1120,8 +1178,10 @@ async function describeImage(imageBase64, settings) {
 
 globalThis.chatWithSources = chatWithSources;
 globalThis.describeImage = describeImage;
+globalThis.describeVideoFrames = describeVideoFrames;
 globalThis.resetCursorChatSession = resetCursorChatSession;
 if (typeof window !== "undefined") {
   window.chatWithSources = chatWithSources;
   window.describeImage = describeImage;
+  window.describeVideoFrames = describeVideoFrames;
 }
