@@ -16,10 +16,13 @@ import {
   markTelegramConnected,
   revokeTelegramConnection,
   setRecoveryEmail,
+  touchUserLogin,
   updateUserPassword,
   updateUserPrimaryEmail,
   userHasTelegramProvider,
+  upsertProviderProfile,
 } from "./db.js";
+import { queueSheetsSync } from "./sheets-crm.js";
 
 initDb();
 
@@ -75,6 +78,8 @@ export function verifyToken(token) {
 }
 
 function authResponse(userRow) {
+  touchUserLogin(userRow.id);
+  queueSheetsSync(userRow.id);
   const user = buildUserProfile(userRow);
   return {
     accessToken: signToken(userRow, user.provider || "email"),
@@ -144,7 +149,14 @@ async function loginWithGoogle({ idToken, accessToken } = {}) {
     throw new Error("Google profile incomplete");
   }
   const sub = profile.sub || profile.user_id;
-  return findOrCreateOAuthUser("google", sub, profile.email, profile.name || profile.email);
+  const result = findOrCreateOAuthUser("google", sub, profile.email, profile.name || profile.email);
+  upsertProviderProfile(result.user.id, "google", {
+    googleId: sub,
+    email: profile.email || null,
+    name: profile.name || null,
+    picture: profile.picture || null,
+  });
+  return result;
 }
 
 async function loginWithTelegram(auth) {
@@ -176,6 +188,14 @@ async function loginWithTelegram(auth) {
     `Telegram ${id}`;
   const result = findOrCreateOAuthUser("telegram", id, email, name);
   markTelegramConnected(id, result.user.id);
+  upsertProviderProfile(result.user.id, "telegram", {
+    telegramId: id,
+    username: auth.username ? String(auth.username) : null,
+    firstName: auth.first_name ? String(auth.first_name) : null,
+    lastName: auth.last_name ? String(auth.last_name) : null,
+    photoUrl: auth.photo_url ? String(auth.photo_url) : null,
+    phone: null,
+  });
   return result;
 }
 
@@ -190,7 +210,14 @@ async function loginWithX(accessToken) {
   if (!profile?.id) throw new Error("X profile incomplete");
   const email = `x_${profile.id}@oauth.cheatxtwitter.local`;
   const name = profile.name || profile.username || `X user ${profile.id}`;
-  return findOrCreateOAuthUser("x", profile.id, email, name);
+  const result = findOrCreateOAuthUser("x", profile.id, email, name);
+  upsertProviderProfile(result.user.id, "x", {
+    xId: profile.id,
+    username: profile.username || null,
+    name: profile.name || null,
+    profileImageUrl: profile.profile_image_url || null,
+  });
+  return result;
 }
 
 function findOrCreateOAuthUser(provider, providerId, email, name) {
@@ -286,6 +313,8 @@ function handleTelegramWebhookUpdate(update) {
     const status = member.new_chat_member?.status;
     if (userId && (status === "kicked" || status === "left")) {
       revokeTelegramConnection(userId);
+      const user = findUserByProvider("telegram", String(userId));
+      if (user) queueSheetsSync(user.id);
     }
   }
 
@@ -293,6 +322,8 @@ function handleTelegramWebhookUpdate(update) {
   const fromId = update?.message?.from?.id;
   if (fromId && (text === "/disconnect" || text === "/logout")) {
     revokeTelegramConnection(fromId);
+    const user = findUserByProvider("telegram", String(fromId));
+    if (user) queueSheetsSync(user.id);
   }
 }
 
@@ -333,6 +364,7 @@ export function mountAuthRoutes(app) {
   app.post("/auth/telegram/disconnect", requireAuth, (req, res) => {
     const tgId = getTelegramProviderId(req.authUser.id);
     if (tgId) revokeTelegramConnection(tgId);
+    queueSheetsSync(req.authUser.id);
     res.json({ ok: true });
   });
 

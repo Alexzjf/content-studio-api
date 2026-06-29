@@ -1,18 +1,38 @@
 /**
- * cheatXtwitter — semi-auto reply on X posts (analyze → draft → user publishes).
+ * cheatXtwitter — semi-auto reply on X posts + author replies on comments under your posts.
  */
 (function () {
   const BTN_CLASS = "csx-comment-btn";
+  const BTN_AUTHOR_CLASS = "csx-author-reply-btn";
   const INJECTED_ATTR = "data-csx-comment";
+  const INJECTED_MODE_ATTR = "data-csx-comment-mode";
   const MAX_IMAGES = 2;
   const MAX_VIDEO_BYTES = 28 * 1024 * 1024;
+  const SKIP_HANDLES = new Set([
+    "home",
+    "explore",
+    "notifications",
+    "messages",
+    "search",
+    "i",
+    "settings",
+    "compose",
+    "lists",
+    "bookmarks",
+    "communities",
+    "premium",
+    "grok",
+  ]);
 
   const STR = {
     uk: {
       btn: "cheatX",
+      btnAuthor: "відповідь",
       analyzing: "Аналіз…",
       done: "Коментар вставлено в X ✓",
+      doneAuthor: "Відповідь вставлено в X ✓",
       errNoPost: "Не вдалося прочитати текст поста.",
+      errNoComment: "Не вдалося прочитати коментар.",
       errNoEditor: "Не знайдено поле відповіді. Спробуйте ще раз.",
       errInsert: "Коментар не вставився. Клікніть у поле відповіді й натисніть cheatX знову.",
       errGeneric: "Не вдалося згенерувати коментар.",
@@ -20,9 +40,12 @@
     },
     en: {
       btn: "cheatX",
+      btnAuthor: "reply",
       analyzing: "Analyzing…",
       done: "Comment inserted into X ✓",
+      doneAuthor: "Reply inserted into X ✓",
       errNoPost: "Could not read post text.",
+      errNoComment: "Could not read comment text.",
       errNoEditor: "Reply field not found. Try again.",
       errInsert: "Comment was not inserted. Click the reply field and try cheatX again.",
       errGeneric: "Failed to generate comment.",
@@ -32,8 +55,10 @@
 
   let uiLang = "uk";
   let activeEditor = null;
+  let myHandleCache = "";
   let commentPrefs = {
     enabled: true,
+    authorReplyEnabled: true,
     analyzeVideo: true,
     analyzeImages: true,
   };
@@ -85,6 +110,104 @@
     const href = link.getAttribute("href") || "";
     const m = href.match(/^\/([^/?#]+)/);
     return m ? m[1] : "";
+  }
+
+  function normalizeHandle(handle) {
+    return String(handle || "")
+      .replace(/^@/, "")
+      .trim()
+      .toLowerCase();
+  }
+
+  function handleFromHref(href) {
+    const m = String(href || "").match(/^\/([^/?#]+)/);
+    if (!m) return "";
+    const handle = m[1].toLowerCase();
+    return SKIP_HANDLES.has(handle) ? "" : handle;
+  }
+
+  function detectMyHandle() {
+    if (myHandleCache) return myHandleCache;
+
+    const selectors = [
+      'a[data-testid="AppTabBar_Profile_Link"]',
+      '[data-testid="SideNav_AccountSwitcher_Button"] a[href^="/"]',
+      'nav a[href^="/"][aria-label*="Profile"]',
+      'nav a[href^="/"][aria-label*="Профіль"]',
+    ];
+
+    for (const sel of selectors) {
+      const link = document.querySelector(sel);
+      const handle = handleFromHref(link?.getAttribute("href"));
+      if (handle) {
+        myHandleCache = handle;
+        return handle;
+      }
+    }
+
+    return "";
+  }
+
+  function getThreadArticles() {
+    return [...document.querySelectorAll('article[data-testid="tweet"]')];
+  }
+
+  function hasReplyingToContext(article) {
+    const social = article.querySelector('[data-testid="socialContext"]');
+    const text = (social?.innerText || social?.textContent || "").toLowerCase();
+    return text.includes("replying to") || text.includes("відповідь") || text.includes("відповідає");
+  }
+
+  function isReplyingToHandle(article, handle) {
+    const target = normalizeHandle(handle);
+    if (!target) return false;
+
+    const social = article.querySelector('[data-testid="socialContext"]');
+    if (!social) return false;
+
+    const text = (social.innerText || social.textContent || "").toLowerCase();
+    if (text.includes(target) || text.includes(`@${target}`)) return true;
+
+    for (const link of social.querySelectorAll('a[href^="/"]')) {
+      if (normalizeHandle(handleFromHref(link.getAttribute("href"))) === target) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function findThreadRoot(article) {
+    const articles = getThreadArticles();
+    const idx = articles.indexOf(article);
+    if (idx < 0) return null;
+
+    if (/\/status\/\d+/i.test(location.pathname)) {
+      return articles[0] || null;
+    }
+
+    for (let i = idx; i >= 0; i--) {
+      if (!hasReplyingToContext(articles[i])) return articles[i];
+    }
+    return articles[0] || null;
+  }
+
+  function isCommentOnMyPost(article, myHandle) {
+    const me = normalizeHandle(myHandle);
+    if (!me) return false;
+
+    const author = normalizeHandle(extractAuthor(article));
+    if (!author || author === me) return false;
+
+    const root = findThreadRoot(article);
+    if (root && root !== article && normalizeHandle(extractAuthor(root)) === me) {
+      return true;
+    }
+
+    if (isReplyingToHandle(article, me)) {
+      return true;
+    }
+
+    return false;
   }
 
   function extractPostText(article) {
@@ -316,17 +439,27 @@
     return result;
   }
 
-  function createButton() {
+  function createButton(mode = "post") {
+    const isAuthor = mode === "author";
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = BTN_CLASS;
-    btn.title = "cheatXtwitter — згенерувати коментар";
-    btn.innerHTML = `<span class="csx-comment-btn-mark">X</span><span class="csx-comment-btn-label">${t("btn")}</span>`;
+    btn.className = isAuthor ? BTN_AUTHOR_CLASS : BTN_CLASS;
+    btn.dataset.csxMode = mode;
+    btn.title = isAuthor
+      ? "cheatXtwitter — згенерувати відповідь на коментар"
+      : "cheatXtwitter — згенерувати коментар";
+    const label = isAuthor ? t("btnAuthor") : t("btn");
+    btn.innerHTML = `<span class="csx-comment-btn-mark">X</span><span class="csx-comment-btn-label">${label}</span>`;
     btn.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
       const article = btn.closest("article");
-      if (article) onCommentClick(article, btn);
+      if (!article) return;
+      if (btn.dataset.csxMode === "author") {
+        onAuthorReplyClick(article, btn);
+      } else {
+        onCommentClick(article, btn);
+      }
     });
     return btn;
   }
@@ -338,29 +471,57 @@
     );
   }
 
-  function injectButton(article) {
-    if (article.getAttribute(INJECTED_ATTR) === "1") return;
+  function injectButton(article, mode = "post") {
+    const existingMode = article.getAttribute(INJECTED_MODE_ATTR);
+    if (article.getAttribute(INJECTED_ATTR) === "1" && existingMode === mode) return;
+
     const bar = findActionBar(article);
     if (!bar) return;
-    if (bar.querySelector(`.${BTN_CLASS}`)) {
-      article.setAttribute(INJECTED_ATTR, "1");
-      return;
-    }
-    bar.appendChild(createButton());
+
+    bar.querySelectorAll(`.${BTN_CLASS}, .${BTN_AUTHOR_CLASS}`).forEach((btn) => btn.remove());
+    bar.appendChild(createButton(mode));
     article.setAttribute(INJECTED_ATTR, "1");
+    article.setAttribute(INJECTED_MODE_ATTR, mode);
   }
 
   function removeAllCommentButtons() {
-    document.querySelectorAll(`.${BTN_CLASS}`).forEach((btn) => btn.remove());
-    document.querySelectorAll(`article[${INJECTED_ATTR}]`).forEach((a) => a.removeAttribute(INJECTED_ATTR));
+    document.querySelectorAll(`.${BTN_CLASS}, .${BTN_AUTHOR_CLASS}`).forEach((btn) => btn.remove());
+    document.querySelectorAll(`article[${INJECTED_ATTR}]`).forEach((a) => {
+      a.removeAttribute(INJECTED_ATTR);
+      a.removeAttribute(INJECTED_MODE_ATTR);
+    });
   }
 
   function scanTweets() {
-    if (!commentPrefs.enabled) {
+    const myHandle = detectMyHandle();
+    const showPosts = commentPrefs.enabled;
+    const showAuthorReplies = commentPrefs.authorReplyEnabled;
+
+    if (!showPosts && !showAuthorReplies) {
       removeAllCommentButtons();
       return;
     }
-    document.querySelectorAll('article[data-testid="tweet"]').forEach(injectButton);
+
+    getThreadArticles().forEach((article) => {
+      if (showAuthorReplies && isCommentOnMyPost(article, myHandle)) {
+        injectButton(article, "author");
+        return;
+      }
+
+      if (!showPosts) {
+        if (article.getAttribute(INJECTED_ATTR) === "1") {
+          article.querySelectorAll(`.${BTN_CLASS}, .${BTN_AUTHOR_CLASS}`).forEach((btn) => btn.remove());
+          article.removeAttribute(INJECTED_ATTR);
+          article.removeAttribute(INJECTED_MODE_ATTR);
+        }
+        return;
+      }
+
+      const author = normalizeHandle(extractAuthor(article));
+      if (author && author === normalizeHandle(myHandle)) return;
+
+      injectButton(article, "post");
+    });
   }
 
   async function loadCommentPrefs() {
@@ -368,14 +529,75 @@
       const { settings = {} } = await chrome.storage.local.get("settings");
       commentPrefs = {
         enabled: settings.commentModeEnabled !== false,
+        authorReplyEnabled: settings.authorReplyModeEnabled !== false,
         analyzeVideo: settings.commentAnalyzeVideo !== false,
         analyzeImages: settings.commentAnalyzeImages !== false,
       };
       if (settings.uiLang === "en" || settings.uiLang === "uk") {
         uiLang = settings.uiLang;
       }
+      const storedHandle = normalizeHandle(settings.xHandle);
+      if (storedHandle) myHandleCache = storedHandle;
     } catch {
       /* ignore */
+    }
+  }
+
+  async function onAuthorReplyClick(commentArticle, btn) {
+    if (btn.disabled) return;
+    btn.disabled = true;
+    const label = btn.querySelector(".csx-comment-btn-label");
+    const prevLabel = label?.textContent;
+    if (label) label.textContent = t("analyzing");
+
+    try {
+      const myHandle = detectMyHandle();
+      const root = findThreadRoot(commentArticle);
+      const postText = root ? extractPostText(root) : "";
+      const commentText = extractPostText(commentArticle);
+      const { sources, notes } = await collectSources(commentArticle);
+
+      if (postText) {
+        sources.unshift({ type: "text", name: "Your post", content: postText });
+      }
+
+      if (!commentText && !sources.length) {
+        throw new Error(t("errNoComment"));
+      }
+
+      const resp = await chrome.runtime.sendMessage({
+        type: "GENERATE_AUTHOR_REPLY",
+        sources,
+        context: {
+          commentAuthor: extractAuthor(commentArticle),
+          commentText,
+          postText,
+          myHandle,
+          note: notes.join(" "),
+        },
+      });
+
+      if (chrome.runtime.lastError) {
+        throw new Error(t("errExt"));
+      }
+      if (resp?.error) {
+        throw new Error(resp.error);
+      }
+
+      const reply = (resp?.text || "").trim();
+      if (!reply) {
+        throw new Error(t("errGeneric"));
+      }
+
+      await openReply(commentArticle);
+      await wait(450);
+      await syncCommentToX(commentArticle, reply);
+      showToast(t("doneAuthor"));
+    } catch (err) {
+      showToast(err.message || t("errGeneric"), true);
+    } finally {
+      btn.disabled = false;
+      if (label) label.textContent = prevLabel || t("btnAuthor");
     }
   }
 
@@ -428,6 +650,7 @@
   function boot() {
     uiLang = detectLang();
     document.getElementById("csx-publish-bar")?.remove();
+    myHandleCache = "";
     void loadCommentPrefs().then(() => scanTweets());
 
     const observer = new MutationObserver(() => {
@@ -437,6 +660,7 @@
 
     chrome.storage?.onChanged?.addListener?.((changes, area) => {
       if (area !== "local" || !changes.settings) return;
+      myHandleCache = "";
       void loadCommentPrefs().then(() => scanTweets());
     });
   }

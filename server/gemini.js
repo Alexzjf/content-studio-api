@@ -1,4 +1,4 @@
-const FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite"];
+const FALLBACK_MODELS = ["gemini-2.0-flash", "gemini-2.5-flash-lite", "gemini-2.5-flash"];
 
 function normalizeModel(model) {
   const m = String(model || "gemini-2.5-flash")

@@ -187,6 +187,9 @@ ${formatSourcesBlock(sources, "post")}`;
 }
 
 function buildSystemPrompt(sources, settings) {
+  if (settings.authorReplyMode && globalThis.CommentPrompt?.buildAuthorReplySystemPrompt) {
+    return globalThis.CommentPrompt.buildAuthorReplySystemPrompt(sources, settings);
+  }
   if (settings.commentMode && globalThis.CommentPrompt?.buildCommentSystemPrompt) {
     return globalThis.CommentPrompt.buildCommentSystemPrompt(sources, settings);
   }
@@ -947,12 +950,18 @@ async function hostedRequest(path, body, settings, signal) {
     if (base.includes("loca.lt")) {
       headers["Bypass-Tunnel-Reminder"] = "true";
     }
+    try {
+      const { auth } = await chrome.storage.local.get("auth");
+      if (auth?.accessToken) headers.Authorization = `Bearer ${auth.accessToken}`;
+    } catch {
+      /* ignore */
+    }
 
     try {
       const response = await fetchWithTimeout(
         `${base}${path}`,
         { method: "POST", headers, body: JSON.stringify(body) },
-        90000,
+        path === "/v1/chat" || path === "/v1/describe-video" ? 140000 : 90000,
         "Cloud",
         signal
       );
@@ -964,10 +973,17 @@ async function hostedRequest(path, body, settings, signal) {
             ? base.includes("localhost") || base.includes("127.0.0.1")
               ? "Локальний сервер AI не запущений. cd server && npm start"
               : "__silent_ai__"
+            : data?.code === "LIMIT_EXCEEDED" || data?.code === "VIDEO_LIMIT_EXCEEDED"
+              ? "__plan_limit__"
             : /зайнят|quota|rate limit|Ліміт/i.test(data?.error || "")
               ? "__silent_ai__"
               : data.error || `Cloud API error (${response.status})`;
         lastError = msg;
+        if (data?.code === "LIMIT_EXCEEDED" || data?.code === "VIDEO_LIMIT_EXCEEDED") {
+          const err = new Error("__plan_limit__");
+          err.code = data.code;
+          throw err;
+        }
         if (response.status === 503 && bases.length > 1) continue;
         if (response.status === 404 && bases.length > 1) {
           lastError = msg;
@@ -1043,7 +1059,7 @@ async function hostedDescribeVideo(framesBase64, settings, batchPrompt) {
 }
 
 const VIDEO_FRAMES_PROMPT =
-  "These images are consecutive video frames (1 per second). Describe what happens visually: scenes, people, actions, on-screen text, UI, products, brands, mood. Be factual and concise (80-160 words). Same language as any visible text, otherwise Ukrainian or English.";
+  "These images are consecutive video frames sampled from one clip. Describe everything visible: who/what appears, actions, setting, objects, products, brands, logos, on-screen text, UI, numbers, and how the scene changes over time. Be specific — name what you recognize; count items when relevant; quote readable text. Avoid vague summaries when details are visible. Be factual (100-200 words). Same language as any visible text, otherwise Ukrainian or English.";
 
 async function describeVideoBatch(frames, settings, batchPrompt) {
   const prompt = batchPrompt || VIDEO_FRAMES_PROMPT;
@@ -1111,21 +1127,23 @@ async function describeVideoFrames(framesBase64, settings, frameMeta) {
   const frames = (framesBase64 || []).filter(Boolean);
   if (!frames.length) throw new Error("No video frames");
 
-  const BATCH = 12;
+  const BATCH = 16;
   const batches = [];
   for (let i = 0; i < frames.length; i += BATCH) {
     batches.push(frames.slice(i, i + BATCH));
   }
 
   const meta = Array.isArray(frameMeta) ? frameMeta : null;
-  const summaries = await mapConcurrent(batches, 6, async (batch, batchIdx) => {
+  const fps = meta?.[0]?.fps || globalThis.VIDEO_FPS_LONG || 5;
+  const summaries = await mapConcurrent(batches, 8, async (batch, batchIdx) => {
     const startIdx = batchIdx * BATCH;
-    const startSec = meta?.[startIdx]?.second ?? startIdx;
-    const endSec = meta?.[startIdx + batch.length - 1]?.second ?? startSec + batch.length - 1;
+    const startSec = meta?.[startIdx]?.second ?? startIdx / fps;
+    const endSec = meta?.[startIdx + batch.length - 1]?.second ?? startSec + batch.length / fps;
+    const batchFps = meta?.[startIdx]?.fps || fps;
     const batchPrompt =
       batch.length === 1
         ? `Video frame at ${startSec}s. ${VIDEO_FRAMES_PROMPT}`
-        : `Video frames from ${startSec}s to ${endSec}s (1 frame per second). ${VIDEO_FRAMES_PROMPT}`;
+        : `Video frames from ${startSec}s to ${endSec}s (~${batchFps} frames per second). ${VIDEO_FRAMES_PROMPT}`;
     const text = await describeVideoBatch(batch, settings, batchPrompt);
     return String(text || "").trim();
   });

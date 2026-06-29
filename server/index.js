@@ -1,5 +1,11 @@
 import express from "express";
 import { mountAuthRoutes, ensureTelegramWebhook } from "./auth.js";
+import { mountAdminRoutes } from "./admin.js";
+import { mountBillingRoutes } from "./billing.js";
+import { handleStripeWebhookRaw } from "./stripe-billing.js";
+import { isSheetsConfigured } from "./sheets-crm.js";
+import { verifyToken } from "./auth.js";
+import { checkAndConsumeQuota } from "./plans.js";
 import { readFileSync, existsSync } from "fs";
 import { geminiGenerate } from "./gemini.js";
 import { createKeyPool, parseApiKeys } from "./key-pool.js";
@@ -22,31 +28,80 @@ function loadEnvFile() {
 loadEnvFile();
 
 const app = express();
+app.post(
+  "/billing/webhook/stripe",
+  express.raw({ type: "application/json" }),
+  handleStripeWebhookRaw
+);
 app.use(express.json({ limit: "12mb" }));
 
 const GEMINI_API_KEYS = parseApiKeys(process.env.GEMINI_API_KEYS || process.env.GEMINI_API_KEY);
 const keyPool = createKeyPool(GEMINI_API_KEYS);
 const GEMINI_API_KEY = GEMINI_API_KEYS[0] || "";
 const EXTENSION_SECRET = process.env.EXTENSION_SECRET || "";
-const DAILY_LIMIT = Number(process.env.DAILY_LIMIT_PER_CLIENT || 9999);
 const DEFAULT_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 const PORT = Number(process.env.PORT || 8787);
 
-const usage = new Map();
-
-function todayKey() {
-  return new Date().toISOString().slice(0, 10);
+function readBearer(req) {
+  const auth = req.headers.authorization || "";
+  return auth.startsWith("Bearer ") ? auth.slice(7) : "";
 }
 
-function checkRateLimit(clientId) {
-  const key = `${clientId}:${todayKey()}`;
-  const entry = usage.get(key) || { count: 0 };
-  if (entry.count >= DAILY_LIMIT) {
-    return false;
+function aiAuthMiddleware(req, res, next) {
+  if (!GEMINI_API_KEYS.length) {
+    return res.status(503).json({ error: "Server missing GEMINI_API_KEY" });
   }
-  entry.count += 1;
-  usage.set(key, entry);
-  return true;
+
+  const token = readBearer(req);
+  if (EXTENSION_SECRET && token === EXTENSION_SECRET) {
+    req.clientId = String(req.headers["x-client-id"] || req.ip || "anonymous").slice(0, 128);
+    return next();
+  }
+
+  const payload = verifyToken(token);
+  if (!payload?.sub) {
+    return res.status(401).json({
+      error: "Sign in required to use shared AI",
+      code: "AUTH_REQUIRED",
+    });
+  }
+
+  const isVideo = req.path.includes("describe-video");
+  const quota = checkAndConsumeQuota(payload.sub, { kind: isVideo ? "video" : "request" });
+  if (!quota.ok) {
+    return res.status(429).json({
+      error: quota.message,
+      code: quota.code,
+      plan: quota.plan,
+      used: quota.requests?.used,
+      limit: quota.requests?.limit,
+      videosUsed: quota.videos?.used,
+      videosLimit: quota.videos?.limit,
+      resetsAt: quota.resetsAt,
+    });
+  }
+
+  req.authUserId = payload.sub;
+  req.clientId = payload.sub;
+  next();
+}
+
+function trimSources(sources, maxChars = 100000) {
+  if (!Array.isArray(sources)) return [];
+  let budget = maxChars;
+  return sources
+    .filter((s) => s?.content?.trim())
+    .map((s) => {
+      const content = String(s.content || "");
+      if (content.length <= budget) {
+        budget -= content.length;
+        return s;
+      }
+      const trimmed = `${content.slice(0, Math.max(0, budget))}…`;
+      budget = 0;
+      return { ...s, content: trimmed };
+    })
+    .filter((s) => s.content?.trim());
 }
 
 function trimHistory(history, maxMessages = 16, maxChars = 8000) {
@@ -73,28 +128,12 @@ app.use((req, res, next) => {
 });
 
 function authMiddleware(req, res, next) {
-  if (!GEMINI_API_KEYS.length) {
-    return res.status(503).json({ error: "Server missing GEMINI_API_KEY" });
-  }
-  if (EXTENSION_SECRET) {
-    const auth = req.headers.authorization || "";
-    if (auth !== `Bearer ${EXTENSION_SECRET}`) {
-      return res.status(401).json({ error: "Unauthorized" });
-    }
-  }
-  const clientId = req.headers["x-client-id"] || req.ip || "anonymous";
-  req.clientId = String(clientId).slice(0, 128);
-  if (!checkRateLimit(req.clientId)) {
-    return res.status(429).json({
-      error: `Ліміт сервера: ${DAILY_LIMIT} запитів на день. Завтра або підніміть DAILY_LIMIT_PER_CLIENT у server/.env`,
-    });
-  }
-  next();
+  return aiAuthMiddleware(req, res, next);
 }
 
-const API_VERSION = "1.44.0";
-const INTERNAL_RETRY_MS = Number(process.env.INTERNAL_RETRY_MS || 90000);
-const KEY_COOLDOWN_MS = Number(process.env.KEY_COOLDOWN_MS || 30000);
+const API_VERSION = "1.45.0";
+const INTERNAL_RETRY_MS = Number(process.env.INTERNAL_RETRY_MS || 75000);
+const KEY_COOLDOWN_MS = Number(process.env.KEY_COOLDOWN_MS || 20000);
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -149,7 +188,7 @@ async function generateWithKeyRotation(options) {
     }
 
     round += 1;
-    await sleep(Math.min(2000, 400 + round * 250));
+    await sleep(Math.min(1200, 300 + round * 200));
   }
 
   const err = lastError || new Error("Асистент тимчасово зайнятий. Спробуйте ще раз.");
@@ -172,18 +211,28 @@ app.get("/health", (_req, res) => {
 });
 
 mountAuthRoutes(app);
+mountAdminRoutes(app);
+mountBillingRoutes(app);
 void ensureTelegramWebhook();
+
+const privacyPath = new URL("./store/privacy-policy.html", import.meta.url).pathname;
+if (existsSync(privacyPath)) {
+  app.get("/privacy", (_req, res) => {
+    res.type("html").sendFile(privacyPath);
+  });
+}
 
 app.post("/v1/chat", authMiddleware, async (req, res) => {
   try {
     const { sources = [], settings = {}, history = [] } = req.body || {};
+    const trimmedSources = trimSources(sources);
     const trimmedHistory = trimHistory(history);
-    const hasSources = sources.some((s) => s?.content?.trim());
+    const hasSources = trimmedSources.some((s) => s?.content?.trim());
     const hasMessage = trimmedHistory.some((h) => h?.content?.trim());
     if (!hasSources && !hasMessage) {
       return res.status(400).json({ error: "Message required" });
     }
-    const systemText = buildSystemPrompt(sources, settings);
+    const systemText = buildSystemPrompt(trimmedSources, settings);
     const text = await generateWithKeyRotation({
       model: settings.geminiModel || DEFAULT_MODEL,
       systemText,
@@ -277,5 +326,10 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log(`  Network: http://0.0.0.0:${PORT}`);
   if (!GEMINI_API_KEYS.length) {
     console.warn("Warning: set GEMINI_API_KEY in server/.env or Render Environment");
+  }
+  if (isSheetsConfigured()) {
+    console.log("  Sheets:  Google Sheets CRM enabled");
+  } else {
+    console.log("  Sheets:  not configured (see GOOGLE_SHEETS_CRM.md)");
   }
 });

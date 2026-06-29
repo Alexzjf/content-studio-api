@@ -1,4 +1,4 @@
-const APP_VERSION = "1.44.0";
+const APP_VERSION = "1.45.0";
 
 let chatStatusTicker = null;
 let hostedWarmAt = 0;
@@ -43,6 +43,7 @@ const DEFAULT_SETTINGS = {
   customInstructions: "",
   panelWidthPercent: 25,
   commentModeEnabled: true,
+  authorReplyModeEnabled: true,
   commentLang: "auto",
   commentMinLen: 50,
   commentMaxLen: 280,
@@ -144,6 +145,17 @@ function hostedApiHeaders(base) {
   return headers;
 }
 
+async function hostedApiHeadersWithAuth(base) {
+  const headers = hostedApiHeaders(base);
+  try {
+    const token = await window.AppAuth?.getAccessToken?.();
+    if (token) headers.Authorization = `Bearer ${token}`;
+  } catch {
+    /* ignore */
+  }
+  return headers;
+}
+
 function shouldSuppressStatusError(text) {
   const msg = String(text || "");
   if (msg === "__silent_ai__") return true;
@@ -155,6 +167,12 @@ function shouldSuppressStatusError(text) {
 
 function formatApiError(status, data, base) {
   const raw = data?.error || "";
+  if (data?.code === "LIMIT_EXCEEDED" || data?.code === "VIDEO_LIMIT_EXCEEDED") {
+    return t("planLimitExceeded");
+  }
+  if (data?.code === "AUTH_REQUIRED") {
+    return t("authFailed");
+  }
   if (/Ліміт сервера|Daily limit reached/i.test(raw)) {
     return t("aiSharedUnavailable");
   }
@@ -183,7 +201,7 @@ function formatApiError(status, data, base) {
     return t("serverWrongUrl");
   }
   if (status === 429) {
-    return t("aiSharedUnavailable");
+    return /зайнят|busy/i.test(raw) ? t("aiSharedBusy") : t("aiSharedBusy");
   }
   if (status === 403) {
     return t("aiSharedUnavailable");
@@ -223,7 +241,7 @@ function retryWaitSec(status, data, _raw) {
 
 async function hostedApiPost(path, body, settings, timeoutMs = 45000, externalSignal) {
   const bases = getHostedApiBases(settings);
-  const deadline = Date.now() + 95000;
+  const deadline = Date.now() + (path === "/v1/chat" || path === "/v1/describe-video" ? 145000 : 95000);
   let lastError = null;
 
   for (const base of bases) {
@@ -242,7 +260,7 @@ async function hostedApiPost(path, body, settings, timeoutMs = 45000, externalSi
       try {
         const response = await fetch(`${base}${path}`, {
           method: "POST",
-          headers: hostedApiHeaders(base),
+          headers: await hostedApiHeadersWithAuth(base),
           body: JSON.stringify(body),
           signal: controller.signal,
         });
@@ -257,6 +275,12 @@ async function hostedApiPost(path, body, settings, timeoutMs = 45000, externalSi
           const raw =
             data?.error ||
             (rawText && rawText.length < 240 && !/<html/i.test(rawText) ? rawText.trim() : "");
+          if (data?.code === "LIMIT_EXCEEDED" || data?.code === "VIDEO_LIMIT_EXCEEDED") {
+            const err = new Error(t("planLimitExceeded"));
+            err.code = data.code;
+            err.planUsage = data;
+            throw err;
+          }
           if (isRetryableAiError(response.status, raw) && rateTry === 0 && Date.now() < deadline) {
             const sec = retryWaitSec(response.status, data, raw);
             setStatus(t("aiThinking"));
@@ -371,6 +395,9 @@ function getSharedDirectGeminiKey() {
 function isSharedQuotaError(err) {
   const msg = String(err?.message || "");
   return (
+    err?.code === "LIMIT_EXCEEDED" ||
+    err?.code === "VIDEO_LIMIT_EXCEEDED" ||
+    msg === "__plan_limit__" ||
     msg === "__silent_ai__" ||
     msg === t("aiSharedUnavailable") ||
     msg === t("aiSharedBusy") ||
@@ -412,16 +439,40 @@ async function hostedChatDirect(sources, settings, history, signal) {
     await warmHostedServer({ showStatus: false });
   }
 
-  setStatus(t("aiThinking"));
-  const data = await hostedApiPost(
-    "/v1/chat",
-    { sources, settings, history: trimHistoryForApi(history) },
-    settings,
-    90000,
-    signal
-  );
-  if (!data.text?.trim()) throw new Error("Empty AI response");
-  return data.text.trim();
+  const ownGemini = String(settings.ownApiKeys?.gemini || settings.geminiApiKey || "").trim();
+
+  const attemptHosted = async () => {
+    setStatus(t("aiThinking"));
+    const data = await hostedApiPost(
+      "/v1/chat",
+      { sources, settings, history: trimHistoryForApi(history) },
+      settings,
+      130000,
+      signal
+    );
+    if (!data.text?.trim()) throw new Error("Empty AI response");
+    return data.text.trim();
+  };
+
+  for (let tryNum = 0; tryNum < 2; tryNum++) {
+    try {
+      return await attemptHosted();
+    } catch (err) {
+      if (signal?.aborted || isChatAbortedError(err)) throw err;
+      if (tryNum === 0 && isSharedQuotaError(err)) {
+        setStatus(t("aiSharedBusy"));
+        await new Promise((r) => setTimeout(r, 4000));
+        continue;
+      }
+      if (ownGemini && isSharedQuotaError(err)) {
+        setStatus(t("aiSharedFallbackOwnKey"));
+        return callSharedGeminiDirect(sources, settings, history, signal, ownGemini);
+      }
+      throw err;
+    }
+  }
+
+  throw new Error(t("aiSharedBusy"));
 }
 
 async function hostedDescribeDirect(imageBase64, settings) {
@@ -1282,8 +1333,17 @@ function bindEvents() {
   });
   $("chatForm")?.addEventListener("submit", (e) => {
     e.preventDefault();
-    sendChatMessage($("chatInput").value.trim());
+    submitChatInput();
   });
+
+  const chatInput = $("chatInput");
+  chatInput?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      submitChatInput();
+    }
+  });
+  chatInput?.addEventListener("input", () => resizeChatInput());
 
   document.querySelectorAll(".chip").forEach((chip) => {
     chip.addEventListener("click", () => {
@@ -1296,28 +1356,87 @@ function bindEvents() {
     });
   });
 
-  const dropZone = document.querySelector(".sources-panel");
-  if (!dropZone) return;
+  bindSidebarDropZone();
+}
 
-  dropZone.addEventListener("dragover", (e) => {
+function resizeChatInput() {
+  const el = $("chatInput");
+  if (!el) return;
+  el.style.height = "auto";
+  el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
+}
+
+function submitChatInput() {
+  const el = $("chatInput");
+  if (!el) return;
+  const text = el.value.trim();
+  if (!text || isBusy) return;
+  sendChatMessage(text);
+  el.value = "";
+  resizeChatInput();
+}
+
+function classifyDroppedFile(file) {
+  const type = (file.type || "").toLowerCase();
+  const name = (file.name || "").toLowerCase();
+  if (
+    type.startsWith("video/") ||
+    /\.(mp4|mov|webm|mkv|avi|m4v|mpeg|mpg)$/i.test(name)
+  ) {
+    return "media";
+  }
+  if (
+    type.startsWith("audio/") ||
+    /\.(mp3|wav|m4a|ogg|flac|aac|opus)$/i.test(name)
+  ) {
+    return "media";
+  }
+  if (type.startsWith("image/") || /\.(jpg|jpeg|png|gif|webp|bmp|heic)$/i.test(name)) {
+    return "image";
+  }
+  if (type.startsWith("text/") || /\.(txt|md|text)$/i.test(name)) {
+    return "text";
+  }
+  return "unknown";
+}
+
+function handleDroppedFile(file) {
+  if (!file) return;
+  const kind = classifyDroppedFile(file);
+  if (kind === "media") addMediaSource(file);
+  else if (kind === "image") addImageSource(file);
+  else if (kind === "text") addTextFileSource(file);
+  else setStatus(t("unsupportedFiles"), "error");
+}
+
+function bindSidebarDropZone() {
+  const sidebar = document.querySelector(".sidebar");
+  const sourcesPanel = document.querySelector(".sources-panel");
+  if (!sidebar) return;
+
+  const setDragActive = (on) => {
+    sidebar.classList.toggle("dragover", on);
+    sourcesPanel?.classList.toggle("dragover", on);
+  };
+
+  sidebar.addEventListener("dragenter", (e) => {
     e.preventDefault();
-    dropZone.classList.add("dragover");
+    setDragActive(true);
   });
-  dropZone.addEventListener("dragleave", () => dropZone.classList.remove("dragover"));
-  dropZone.addEventListener("drop", (e) => {
+  sidebar.addEventListener("dragover", (e) => {
     e.preventDefault();
-    dropZone.classList.remove("dragover");
-    const file = e.dataTransfer.files[0];
-    if (!file) return;
-    if (file.type.startsWith("video/") || file.type.startsWith("audio/")) {
-      addMediaSource(file);
-    } else if (file.type.startsWith("image/")) {
-      addImageSource(file);
-    } else if (file.type.startsWith("text/") || file.name.endsWith(".md") || file.name.endsWith(".txt")) {
-      addTextFileSource(file);
-    } else {
-      setStatus(t("unsupportedFiles"), "error");
-    }
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+    setDragActive(true);
+  });
+  sidebar.addEventListener("dragleave", (e) => {
+    if (!sidebar.contains(e.relatedTarget)) setDragActive(false);
+  });
+  sidebar.addEventListener("drop", (e) => {
+    e.preventDefault();
+    setDragActive(false);
+    const files = e.dataTransfer?.files;
+    if (!files?.length) return;
+    for (const file of files) handleDroppedFile(file);
   });
 }
 
@@ -1602,14 +1721,18 @@ function formatOwnApiError(message, provider) {
 function setStatus(text, type = "") {
   const ownMode = getAiConnectionMode() === "own";
   if (type === "error" && !ownMode) {
-    text = t("aiSharedUnavailable");
+    const msg = String(text || "");
+    if (msg === t("aiSharedBusy") || /зайнятий|busy/i.test(msg)) {
+      text = t("aiSharedBusy");
+    } else if (msg === t("aiTimeout") || /занадто довго|timeout/i.test(msg)) {
+      text = t("aiTimeout");
+    } else if (msg === "__silent_ai__" || !msg || shouldSuppressStatusError(msg)) {
+      text = t("aiSharedUnavailable");
+    }
   } else if (type === "error" && (!text || text === "__silent_ai__")) {
     text = ownMode
       ? "AI не відповів. Перевірте API ключ у Налаштуваннях."
       : t("aiSharedUnavailable");
-  }
-  if (type === "error" && !ownMode && shouldSuppressStatusError(text)) {
-    text = t("aiSharedUnavailable");
   }
   const el = $("status");
   if (el) {
@@ -1903,32 +2026,21 @@ async function persistChatHistory() {
 async function restoreChatHistory() {
   await loadChatSessionsStore();
 
-  if (currentSessionId) {
-    const session = getCurrentChatSession();
-    if (session?.messages?.length) {
-      chatHistory = session.messages.filter((m) => m?.role && m?.content);
-      renderChatMessagesFromHistory();
-      renderChatSessionsList();
-      return;
-    }
-  }
+  chatSessions = chatSessions.filter(
+    (s) => Array.isArray(s.messages) && s.messages.length > 0
+  );
+
+  chatHistory = [];
+  globalThis.resetCursorChatSession?.();
+  currentSessionId = null;
+  ensureCurrentChatSession();
+  renderChatMessagesFromHistory();
+  renderChatSessionsList();
+  await saveChatSessionsStore();
 
   try {
-    const stored = await chrome.storage.session.get(CHAT_HISTORY_KEY);
-    const saved = stored?.[CHAT_HISTORY_KEY];
-    if (Array.isArray(saved) && saved.length) {
-      chatHistory = saved.filter((m) => m?.role && m?.content);
-      ensureCurrentChatSession();
-      syncCurrentChatSession();
-      renderChatMessagesFromHistory();
-      await saveChatSessionsStore();
-      renderChatSessionsList();
-      return;
-    }
+    await chrome.storage.session.remove(CHAT_HISTORY_KEY);
   } catch (_) {}
-
-  ensureCurrentChatSession();
-  renderChatSessionsList();
 }
 
 function isChatAbortedError(err) {
@@ -2291,6 +2403,7 @@ async function sendChatMessage(text, options = {}) {
   }
 
   $("chatInput").value = "";
+  resizeChatInput();
   appendMessage("user", options.displayText || text);
   chatHistory.push({ role: "user", content: text });
   void persistChatHistory();
@@ -2330,7 +2443,7 @@ async function sendChatMessage(text, options = {}) {
         }
       };
     } else if (settings.aiProvider === "hosted") {
-      signal = mergeAbortSignals(abort.signal, 90000);
+      signal = mergeAbortSignals(abort.signal, 145000);
     }
 
     const readySources = prepareSourcesForChat(getReadySources(), chatMode);
@@ -2371,7 +2484,21 @@ async function sendChatMessage(text, options = {}) {
     }
     let msg = err?.message || "";
     if (getAiConnectionMode() === "shared") {
-      flashSharedUnavailable();
+      if (err.code === "LIMIT_EXCEEDED" || err.code === "VIDEO_LIMIT_EXCEEDED" || msg === "__plan_limit__") {
+        setStatus(t("planLimitExceeded"), "error");
+        window.AppSettings?.open?.("plans");
+      } else if (msg === t("aiSharedBusy") || /зайнят/i.test(msg)) {
+        setStatus(t("aiSharedBusy"), "error");
+      } else if (msg === t("aiTimeout")) {
+        setStatus(t("aiTimeout"), "error");
+      } else if (msg === t("aiSharedUnavailable")) {
+        flashSharedUnavailable();
+      } else if (msg === "__silent_ai__") {
+        flashSharedUnavailable();
+      } else {
+        setStatus(msg, "error");
+      }
+      setTimeout(() => setStatus("", ""), 5000);
     } else if (msg === "__silent_ai__") {
       flashSharedUnavailable();
     } else if (msg) {

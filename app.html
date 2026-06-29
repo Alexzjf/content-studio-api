@@ -108,6 +108,8 @@ body.mode-auth-page {
 
         <div id="sourcesList" class="sources-list"></div>
 
+        <p id="sourcesDropHint" class="sources-drop-hint" data-i18n="sourcesDropHint">Drop video, audio, image or text here</p>
+
         <div class="add-source-actions">
           <label class="btn btn-ghost btn-file">
             🎬 <span data-i18n="videoAudio">Video / audio</span>
@@ -167,7 +169,7 @@ body.mode-auth-page {
       </div>
 
       <form id="chatForm" class="chat-input-row">
-        <input type="text" id="chatInput" data-i18n-placeholder="chatPlaceholder" />
+        <textarea id="chatInput" rows="1" data-i18n-placeholder="chatPlaceholder"></textarea>
         <button type="submit" id="chatSendBtn" class="btn btn-primary" data-i18n="send">Send</button>
       </form>
     </main>
@@ -271,6 +273,7 @@ body.mode-auth-page {
       <nav class="settings-nav" aria-label="Settings sections">
         <p class="settings-nav-group" data-i18n="settingsNavAccount">Account</p>
         <button type="button" class="settings-nav-item" data-section="profile" data-i18n="settingsNavProfile">Profile</button>
+        <button type="button" class="settings-nav-item" data-section="plans" data-i18n="settingsNavPlans">Plans</button>
 
         <p class="settings-nav-group" data-i18n="settingsNavExtension">Extension</p>
         <button type="button" class="settings-nav-item active" data-section="general" data-i18n="settingsNavGeneral">General</button>
@@ -329,6 +332,28 @@ body.mode-auth-page {
           <div class="profile-actions">
             <button type="button" id="profileSignOutBtn" class="btn btn-ghost profile-sign-out" data-i18n="profileSignOut">Sign out</button>
           </div>
+        </section>
+
+        <section class="settings-panel" data-panel="plans">
+          <header class="settings-panel-head">
+            <h2 data-i18n="settingsNavPlans">Plans</h2>
+            <p data-i18n="settingsPanelPlansDesc">Shared AI limits and subscription tiers.</p>
+          </header>
+
+          <div id="planUsageCard" class="plan-usage-card hidden">
+            <p class="plan-usage-title" data-i18n="planUsageTitle">Your usage today</p>
+            <p id="planUsageText" class="plan-usage-text">—</p>
+            <div class="plan-usage-bar" aria-hidden="true"><span id="planUsageBar"></span></div>
+            <p id="planLimitBanner" class="plan-limit-banner hidden" data-i18n="planLimitBanner">
+              Free limit reached for today. Upgrade a plan below or use your own API key in Connection.
+            </p>
+          </div>
+
+          <div id="planCards" class="plan-cards"></div>
+
+          <p class="field-hint plan-own-key-hint" data-i18n="planOwnKeyHint">
+            You can always use your own Gemini API key — Settings → Connection → My own API key.
+          </p>
         </section>
 
         <section class="settings-panel active" data-panel="general">
@@ -469,6 +494,12 @@ body.mode-auth-page {
             </label>
           </header>
           <div id="commentSettingsBlock" class="comment-settings-block">
+            <label class="toggle toggle-inline">
+              <input type="checkbox" id="authorReplyModeEnabled" />
+              <span class="toggle-track" aria-hidden="true"></span>
+              <span class="toggle-label" data-i18n="authorReplyModeEnabled">Replies on your posts</span>
+            </label>
+            <p class="field-hint comment-subhint" data-i18n="authorReplyModeHint">On comments under your posts — cheatX drafts a reply as you.</p>
             <div class="field-row">
               <label class="field">
                 <span data-i18n="commentLang">Comment language</span>

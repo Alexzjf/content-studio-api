@@ -295,4 +295,4 @@ export const IMAGE_PROMPT =
   "Describe this image in detail for a social media writer. Include: what is shown, visible text, brands/logos, UI, people and actions, mood. Be factual, 150-400 words. Same language as any text in the image, otherwise English or Ukrainian.";
 
 export const VIDEO_FRAMES_PROMPT =
-  "These images are frames sampled evenly from one video. Describe what happens visually: scenes, people, actions, on-screen text, UI, products, brands, mood. Be factual and specific. Combine into one coherent description (200-500 words). Same language as any visible text, otherwise English or Ukrainian.";
+  "These images are consecutive video frames sampled from one clip. Describe everything visible: who/what appears, actions, setting, objects, products, brands, logos, on-screen text, UI, numbers, and how the scene changes over time. Be specific — name what you recognize; count items when relevant; quote readable text. Avoid vague summaries when details are visible. Be factual and specific. Combine into one coherent description (200-500 words). Same language as any visible text, otherwise English or Ukrainian.";

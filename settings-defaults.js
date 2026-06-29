@@ -1,5 +1,6 @@
 const COMMENT_SETTINGS_DEFAULTS = {
   commentModeEnabled: true,
+  authorReplyModeEnabled: true,
   commentLang: "auto",
   commentMinLen: 50,
   commentMaxLen: 280,

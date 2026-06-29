@@ -184,6 +184,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === "GENERATE_AUTHOR_REPLY") {
+    withServiceWorkerKeepAlive(async () => {
+      const stored = await chrome.storage.local.get("settings");
+      const base = stored.settings || {};
+      const settings = { ...base, authorReplyMode: true, chatMode: "qa" };
+      const chatFn = globalThis.chatWithSources;
+      if (typeof chatFn !== "function") {
+        throw new Error("AI модуль у background не завантажився. Reload розширення.");
+      }
+      const userMsg =
+        globalThis.CommentPrompt?.buildAuthorReplyUserMessage?.(message.context || {}) ||
+        "Write a reply as the post author to this comment. Return only the reply.";
+      const history = [{ role: "user", content: userMsg }];
+      const raw = await chatFn(message.sources || [], settings, history);
+      const text = globalThis.CommentPrompt?.extractCommentText?.(raw, settings) || String(raw || "").trim();
+      return { text };
+    })
+      .then(sendResponse)
+      .catch((err) => sendResponse({ error: err.message }));
+    return true;
+  }
+
   if (message.type === "FILL_X_COMPOSER") {
     const tabId = sender.tab?.id;
     if (!tabId) {

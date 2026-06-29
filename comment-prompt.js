@@ -106,10 +106,64 @@ function extractCommentText(raw, settings = {}) {
   return text;
 }
 
+function buildAuthorReplySystemPrompt(sources, settings = {}) {
+  const style = globalThis.PromptHints?.buildStyleDirectives?.(settings) || "";
+  const sourcesBlock = globalThis.formatSourcesBlock
+    ? globalThis.formatSourcesBlock(sources, "qa")
+    : "(context from post and comment)";
+
+  return `You write ONE reply as the ORIGINAL POST AUTHOR responding to a comment under your X/Twitter post.
+
+RULES:
+- Output ONLY the reply text — no quotes, no "Reply:", no markdown headers.
+- You ARE the post author — first person, your voice, your brand.
+- ${commentLengthHint(settings)}
+- ${commentLanguageHint(settings)}
+- ${commentEmojiHint(settings)}
+- Style: ${commentStyleHint(settings)}
+- Acknowledge what the commenter said — answer questions, thank them, push back politely, or add value.
+- Be specific to their comment and your original post — never generic "thanks!" spam.
+- Do NOT repeat your entire post verbatim.
+- @mention the commenter only if it feels natural.
+- No hashtag spam.
+${commentExtrasHint(settings) ? `- ${commentExtrasHint(settings).replace(/\n/g, "\n- ")}` : ""}
+${style ? `\nPOST STYLE (if compatible):\n- ${style.replace(/\n/g, "\n- ")}` : ""}
+
+CONTEXT (your post + their comment + media):
+${sourcesBlock}`;
+}
+
+function buildAuthorReplyUserMessage(context = {}) {
+  const commenter = context.commentAuthor
+    ? `@${context.commentAuthor.replace(/^@/, "")}`
+    : "a commenter";
+  const lines = [
+    `Write a reply as the post author to ${commenter}'s comment under your X post.`,
+    "",
+  ];
+
+  if (context.postText?.trim()) {
+    lines.push("YOUR ORIGINAL POST:", context.postText.trim(), "");
+  }
+
+  if (context.commentText?.trim()) {
+    lines.push("THEIR COMMENT:", context.commentText.trim(), "");
+  }
+
+  if (context.note?.trim()) {
+    lines.push("NOTE:", context.note.trim(), "");
+  }
+
+  lines.push("Return only the reply body.");
+  return lines.join("\n");
+}
+
 if (typeof globalThis !== "undefined") {
   globalThis.CommentPrompt = {
     buildCommentSystemPrompt,
     buildCommentUserMessage,
+    buildAuthorReplySystemPrompt,
+    buildAuthorReplyUserMessage,
     extractCommentText,
   };
 }

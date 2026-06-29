@@ -630,6 +630,7 @@
     whenReady: () => readyPromise,
     isAuthenticated: async () => !!(await getStoredAuth())?.accessToken,
     getAccessToken,
+    apiRequest,
     getUser,
     fetchProfile,
     linkRecoveryEmail,

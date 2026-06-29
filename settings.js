@@ -4,6 +4,7 @@
 (function () {
   const COMMENT = globalThis.COMMENT_SETTINGS_DEFAULTS || {
     commentModeEnabled: true,
+    authorReplyModeEnabled: true,
     commentLang: "auto",
     commentMinLen: 50,
     commentMaxLen: 280,
@@ -119,6 +120,7 @@
     return {
       uiLang: $("settingsUiLang")?.value || "en",
       commentModeEnabled: $("commentModeEnabled")?.checked !== false,
+      authorReplyModeEnabled: $("authorReplyModeEnabled")?.checked !== false,
       commentLang: $("commentLang")?.value || "auto",
       commentMinLen: minLen,
       commentMaxLen: maxLen,
@@ -135,6 +137,7 @@
     const s = { ...COMMENT, ...settings };
     if ($("settingsUiLang")) $("settingsUiLang").value = s.uiLang || "en";
     if ($("commentModeEnabled")) $("commentModeEnabled").checked = s.commentModeEnabled !== false;
+    if ($("authorReplyModeEnabled")) $("authorReplyModeEnabled").checked = s.authorReplyModeEnabled !== false;
     if ($("commentLang")) $("commentLang").value = s.commentLang || "auto";
     if ($("commentMinLen")) $("commentMinLen").value = String(s.commentMinLen ?? COMMENT.commentMinLen);
     if ($("commentMaxLen")) $("commentMaxLen").value = String(s.commentMaxLen ?? COMMENT.commentMaxLen);
@@ -154,6 +157,9 @@
     $("commentSettingsBlock")?.classList.toggle("disabled", !on);
   }
 
+  let checkoutEnabled = false;
+  let paymentPollTimer = null;
+
   function setActiveSection(section) {
     const id = section || "general";
     document.querySelectorAll(".settings-nav-item").forEach((btn) => {
@@ -168,6 +174,161 @@
       /* ignore */
     }
     if (id === "profile") void refreshProfile();
+    if (id === "plans") void refreshPlans();
+  }
+
+  function planNameKey(id) {
+    const map = { free: "planFree", base: "planBase", pro: "planPro", pro_max: "planProMax" };
+    return map[id] || "planFree";
+  }
+
+  function renderPlanCard(plan, currentPlan, paymentsOn) {
+    const isCurrent = plan.id === currentPlan;
+    const isPaid = plan.priceUsd > 0;
+    const canBuy = isPaid && paymentsOn && !isCurrent;
+    const features = [
+      t("planRequestsDay").replace("{n}", String(plan.dailyRequests)),
+      t("planVideosDay").replace("{n}", String(plan.dailyVideos)),
+      plan.authorReplies ? t("planAuthorReplies") : t("planAuthorRepliesNo"),
+    ];
+    let btnLabel = t("planFree");
+    if (isPaid) {
+      if (isCurrent) btnLabel = t("planCurrent");
+      else if (paymentsOn) btnLabel = t("planBuy");
+      else btnLabel = t("planBuySoon");
+    } else if (isCurrent) {
+      btnLabel = t("planCurrent");
+    }
+    return `
+      <article class="plan-card${isCurrent ? " is-current" : ""}">
+        ${isCurrent ? `<span class="plan-card-badge">${t("planCurrent")}</span>` : ""}
+        <div class="plan-card-head">
+          <h3 class="plan-card-name">${t(planNameKey(plan.id))}</h3>
+          <p class="plan-card-price">${plan.priceUsd ? `<strong>$${plan.priceUsd}</strong> ${t("planPerMonth")}` : t("planFree")}</p>
+        </div>
+        <ul class="plan-card-features">${features.map((f) => `<li>${f}</li>`).join("")}</ul>
+        <button type="button" class="btn btn-ghost btn-sm plan-card-btn${canBuy ? " is-buy" : ""}" data-plan-id="${plan.id}" ${canBuy ? "" : "disabled"}>
+          ${btnLabel}
+        </button>
+      </article>`;
+  }
+
+  function stopPaymentPoll() {
+    if (paymentPollTimer) {
+      clearInterval(paymentPollTimer);
+      paymentPollTimer = null;
+    }
+  }
+
+  function startPaymentPoll(paymentId) {
+    stopPaymentPoll();
+    let attempts = 0;
+    paymentPollTimer = setInterval(async () => {
+      attempts += 1;
+      if (attempts > 40) {
+        stopPaymentPoll();
+        return;
+      }
+      try {
+        const status = await window.AppAuth?.apiRequest?.(`/billing/payment/${paymentId}`, undefined, "GET");
+        if (status?.status === "paid") {
+          stopPaymentPoll();
+          showStatus(t("planPaymentSuccess"));
+          await refreshPlans();
+        }
+      } catch {
+        /* retry */
+      }
+    }, 5000);
+  }
+
+  async function startPlanCheckout(planId, btn) {
+    btn.disabled = true;
+    showStatus(t("planCheckoutOpening"));
+    try {
+      const checkout = await window.AppAuth.apiRequest("/billing/checkout", { plan: planId });
+      const payUrl = checkout?.checkoutUrl || checkout?.invoiceUrl;
+      if (!payUrl) throw new Error(t("planCheckoutError"));
+      chrome.tabs.create({ url: payUrl, active: true });
+      showStatus(t("planPaymentPending"));
+      if (checkout.paymentId) startPaymentPoll(checkout.paymentId);
+    } catch (err) {
+      showStatus(err.message || t("planCheckoutError"));
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function bindPlanCheckout() {
+    $("planCards")?.addEventListener("click", (e) => {
+      const btn = e.target.closest(".plan-card-btn.is-buy");
+      if (!btn || btn.disabled) return;
+      const planId = btn.dataset.planId;
+      if (!planId) return;
+      void startPlanCheckout(planId, btn);
+    });
+  }
+
+  async function refreshPlans() {
+    const usageCard = $("planUsageCard");
+    const cardsEl = $("planCards");
+    if (!cardsEl) return;
+
+    let usage = null;
+    let plans = [];
+    try {
+      const plansRes = await window.AppAuth?.apiRequest?.("/billing/plans", undefined, "GET");
+      plans = plansRes?.plans || [];
+      checkoutEnabled = !!(plansRes?.checkoutEnabled ?? plansRes?.cryptoEnabled);
+      usage = await window.AppAuth?.apiRequest?.("/billing/usage", undefined, "GET");
+    } catch {
+      usageCard?.classList.add("hidden");
+      cardsEl.innerHTML = `<p class="field-hint">${t("authFailed")}</p>`;
+      return;
+    }
+
+    const currentPlan = usage?.plan || "free";
+    cardsEl.innerHTML = plans.map((p) => renderPlanCard(p, currentPlan, checkoutEnabled)).join("");
+
+    if (!usage || !usageCard) return;
+    usageCard.classList.remove("hidden");
+
+    const req = usage.requests || {};
+    const vid = usage.videos || {};
+    const used = Number(req.used || 0);
+    const limit = Number(req.limit || 20);
+    const pct = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
+
+    const usageText = $("planUsageText");
+    if (usageText) {
+      const lines = [
+        t("planUsageLine").replace("{used}", String(used)).replace("{limit}", String(limit)),
+        t("planVideoUsageLine")
+          .replace("{used}", String(vid.used || 0))
+          .replace("{limit}", String(vid.limit || 0)),
+        t("planResetsAt"),
+      ];
+      if (usage.planExpiresAt && currentPlan !== "free") {
+        const exp = new Date(usage.planExpiresAt);
+        const dateStr = Number.isNaN(exp.getTime())
+          ? usage.planExpiresAt
+          : exp.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+        lines.push(t("planExpiresOn").replace("{date}", dateStr));
+      }
+      usageText.textContent = lines.join(" · ");
+    }
+
+    const bar = $("planUsageBar")?.parentElement;
+    const barFill = $("planUsageBar");
+    if (barFill) barFill.style.width = `${pct}%`;
+    bar?.classList.toggle("is-full", used >= limit);
+
+    const banner = $("planLimitBanner");
+    const limitHit = used >= limit;
+    banner?.classList.toggle("hidden", !limitHit);
+    if (banner && limitHit) {
+      banner.textContent = t("planLimitBanner");
+    }
   }
 
   function providerLabel(code) {
@@ -292,6 +453,7 @@
     const ids = [
       "settingsUiLang",
       "commentModeEnabled",
+      "authorReplyModeEnabled",
       "commentLang",
       "commentMinLen",
       "commentMaxLen",
@@ -380,6 +542,7 @@
   function init() {
     if (!$("appSettingsPage")) return;
     bindNav();
+    bindPlanCheckout();
     bindAutosave();
     bindProfileActions();
     if (location.search.includes("settings=1")) open();

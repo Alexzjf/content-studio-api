@@ -47,6 +47,42 @@
   white-space: nowrap;
 }
 
+.csx-author-reply-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin-left: 4px;
+  padding: 0 8px;
+  min-height: 28px;
+  border: 1px solid rgba(126, 138, 255, 0.35);
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(126, 138, 255, 0.22), rgba(95, 118, 255, 0.1));
+  color: #e8eaff;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.15s ease, opacity 0.2s ease;
+  vertical-align: middle;
+}
+
+.csx-author-reply-btn:hover:not(:disabled) {
+  background: rgba(126, 138, 255, 0.28);
+  border-color: rgba(126, 138, 255, 0.48);
+  transform: translateY(-1px);
+}
+
+.csx-author-reply-btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.csx-author-reply-btn .csx-comment-btn-mark {
+  background: #e8eaff;
+  color: #3b4bcc;
+}
+
 .csx-toast {
   position: fixed;
   top: 14px;
