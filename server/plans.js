@@ -1,5 +1,5 @@
 import { findUserById, getDb } from "./db.js";
-import { estimateRequestCost } from "./api-budget.js";
+import { estimateUserRequestCost } from "./api-budget.js";
 
 export const PLANS = {
   free: {
@@ -146,7 +146,7 @@ export function checkAndConsumeQuota(userId, { kind = "request" } = {}) {
 
   const apiBudgetUsd = Number(user?.api_budget_usd || 0);
   if (status.plan !== "free" && apiBudgetUsd > 0) {
-    const cost = estimateRequestCost(kind);
+    const cost = estimateUserRequestCost(user, kind);
     const spent = Number(user?.api_budget_spent_usd || 0);
     if (spent + cost > apiBudgetUsd + 1e-9) {
       return {
@@ -173,7 +173,7 @@ export function checkAndConsumeQuota(userId, { kind = "request" } = {}) {
     .run(userId, day, videoInc, now, videoInc);
 
   if (status.plan !== "free" && apiBudgetUsd > 0) {
-    const cost = estimateRequestCost(kind);
+    const cost = estimateUserRequestCost(user, kind);
     database
       .prepare(
         "UPDATE users SET api_budget_spent_usd = api_budget_spent_usd + ?, updated_at = ? WHERE id = ?"

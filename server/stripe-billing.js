@@ -108,7 +108,9 @@ function markPaymentPaid(payment, meta = {}) {
   }
   updatePaymentStatus(payment.id, "paid", { metaJson: meta });
   const allocation = allocateApiBudgetFromPayment(payment.amount_usd, payment.plan_id);
-  activateUserPlan(payment.user_id, payment.plan_id, 30, { amountUsd: payment.amount_usd });
+  const activation = activateUserPlan(payment.user_id, payment.plan_id, 30, {
+    amountUsd: payment.amount_usd,
+  });
   setPaymentApiBudget(payment.id, allocation.budgetUsd);
   queueSheetsSync(payment.user_id);
   return {
@@ -118,8 +120,10 @@ function markPaymentPaid(payment, meta = {}) {
     userId: payment.user_id,
     planId: payment.plan_id,
     apiBudgetUsd: allocation.budgetUsd,
+    profitUsd: allocation.profitUsd,
     apiShare: allocation.apiShare,
-    estimatedMonthlyCost: allocation.estimatedMonthlyCost,
+    costPerRequest: allocation.costPerRequest,
+    costPerVideo: allocation.costPerVideo,
   };
 }
 

@@ -170,6 +170,18 @@ function runMigrations(database) {
       .prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)")
       .run(7, new Date().toISOString());
   }
+  if (current < 8) {
+    const cols = database.prepare("PRAGMA table_info(users)").all();
+    if (!cols.some((c) => c.name === "api_cost_per_request")) {
+      database.exec("ALTER TABLE users ADD COLUMN api_cost_per_request REAL NOT NULL DEFAULT 0");
+    }
+    if (!cols.some((c) => c.name === "api_cost_per_video")) {
+      database.exec("ALTER TABLE users ADD COLUMN api_cost_per_video REAL NOT NULL DEFAULT 0");
+    }
+    database
+      .prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)")
+      .run(8, new Date().toISOString());
+  }
 }
 
 function migrateLegacyJson(database) {
@@ -684,17 +696,39 @@ export function activateUserPlan(userId, planId, days = 30, { amountUsd } = {}) 
 
   let apiBudgetUsd = 0;
   let apiBudgetSpentUsd = 0;
+  let apiCostPerRequest = 0;
+  let apiCostPerVideo = 0;
   if (amountUsd && planId !== "free") {
-    apiBudgetUsd = allocateApiBudgetFromPayment(amountUsd, planId).budgetUsd;
+    const econ = allocateApiBudgetFromPayment(amountUsd, planId);
+    apiBudgetUsd = econ.budgetUsd;
+    apiCostPerRequest = econ.costPerRequest;
+    apiCostPerVideo = econ.costPerVideo;
   }
 
   getDb()
     .prepare(
-      `UPDATE users SET plan = ?, plan_expires_at = ?, api_budget_usd = ?, api_budget_spent_usd = ?, updated_at = ?
+      `UPDATE users SET plan = ?, plan_expires_at = ?, api_budget_usd = ?, api_budget_spent_usd = ?,
+       api_cost_per_request = ?, api_cost_per_video = ?, updated_at = ?
        WHERE id = ?`
     )
-    .run(planId, expires, apiBudgetUsd, apiBudgetSpentUsd, at, userId);
-  return { planId, planExpiresAt: expires, apiBudgetUsd };
+    .run(
+      planId,
+      expires,
+      apiBudgetUsd,
+      apiBudgetSpentUsd,
+      apiCostPerRequest,
+      apiCostPerVideo,
+      at,
+      userId
+    );
+  return {
+    planId,
+    planExpiresAt: expires,
+    apiBudgetUsd,
+    apiCostPerRequest,
+    apiCostPerVideo,
+    profitUsd: amountUsd ? amountUsd - apiBudgetUsd : 0,
+  };
 }
 
 export function spendUserApiBudget(userId, costUsd) {
