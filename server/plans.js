@@ -1,6 +1,8 @@
 import { findUserById, getDb } from "./db.js";
-import { estimateUserRequestCost } from "./api-budget.js";
+import { estimateUserRequestCost, computePlanApiEconomics } from "./api-budget.js";
 
+// Ліміти розраховані під Gemini 2.5 Flash (важкий запит ~8k in + 800 out)
+// при PLAN_API_COST_SHARE=0.5 — повне використання ≈ 50% ціни на API, 50% прибуток.
 export const PLANS = {
   free: {
     id: "free",
@@ -12,27 +14,27 @@ export const PLANS = {
   },
   base: {
     id: "base",
-    dailyRequests: 80,
-    dailyVideos: 15,
+    dailyRequests: 32,
+    dailyVideos: 7,
     authorReplies: true,
-    priceUsd: 9,
-    priceUah: 349,
+    priceUsd: 12,
+    priceUah: 499,
   },
   pro: {
     id: "pro",
-    dailyRequests: 250,
-    dailyVideos: 50,
+    dailyRequests: 75,
+    dailyVideos: 14,
     authorReplies: true,
-    priceUsd: 19,
-    priceUah: 699,
+    priceUsd: 26,
+    priceUah: 1099,
   },
   pro_max: {
     id: "pro_max",
-    dailyRequests: 800,
-    dailyVideos: 150,
+    dailyRequests: 130,
+    dailyVideos: 23,
     authorReplies: true,
-    priceUsd: 39,
-    priceUah: 1299,
+    priceUsd: 45,
+    priceUah: 1899,
   },
 };
 
@@ -110,14 +112,19 @@ export function getUserUsageStatus(userId) {
 }
 
 export function listPlansForApi() {
-  return Object.values(PLANS).map((p) => ({
-    id: p.id,
-    dailyRequests: p.dailyRequests,
-    dailyVideos: p.dailyVideos,
-    authorReplies: p.authorReplies,
-    priceUsd: p.priceUsd,
-    priceUah: p.priceUah,
-  }));
+  return Object.values(PLANS).map((p) => {
+    const econ = p.priceUsd > 0 ? computePlanApiEconomics(p.priceUsd, p.id) : null;
+    return {
+      id: p.id,
+      dailyRequests: p.dailyRequests,
+      dailyVideos: p.dailyVideos,
+      authorReplies: p.authorReplies,
+      priceUsd: p.priceUsd,
+      priceUah: p.priceUah,
+      profitUsd: econ?.profitUsd ?? 0,
+      apiBudgetUsd: econ?.budgetUsd ?? 0,
+    };
+  });
 }
 
 export function checkAndConsumeQuota(userId, { kind = "request" } = {}) {
