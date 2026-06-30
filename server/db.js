@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { randomUUID } from "crypto";
+import { allocateApiBudgetFromPayment } from "./api-budget.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, "data");
@@ -152,6 +153,22 @@ function runMigrations(database) {
     database
       .prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)")
       .run(6, new Date().toISOString());
+  }
+  if (current < 7) {
+    const cols = database.prepare("PRAGMA table_info(users)").all();
+    if (!cols.some((c) => c.name === "api_budget_usd")) {
+      database.exec("ALTER TABLE users ADD COLUMN api_budget_usd REAL NOT NULL DEFAULT 0");
+    }
+    if (!cols.some((c) => c.name === "api_budget_spent_usd")) {
+      database.exec("ALTER TABLE users ADD COLUMN api_budget_spent_usd REAL NOT NULL DEFAULT 0");
+    }
+    const payCols = database.prepare("PRAGMA table_info(payments)").all();
+    if (!payCols.some((c) => c.name === "api_budget_usd")) {
+      database.exec("ALTER TABLE payments ADD COLUMN api_budget_usd REAL");
+    }
+    database
+      .prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)")
+      .run(7, new Date().toISOString());
   }
 }
 
@@ -653,7 +670,7 @@ export function listAllUserIds() {
   return getDb().prepare("SELECT id FROM users ORDER BY created_at ASC").all().map((r) => r.id);
 }
 
-export function activateUserPlan(userId, planId, days = 30) {
+export function activateUserPlan(userId, planId, days = 30, { amountUsd } = {}) {
   const user = findUserById(userId);
   if (!user) return null;
   const now = Date.now();
@@ -664,10 +681,31 @@ export function activateUserPlan(userId, planId, days = 30) {
   }
   const expires = new Date(base + days * 24 * 60 * 60 * 1000).toISOString();
   const at = new Date().toISOString();
+
+  let apiBudgetUsd = 0;
+  let apiBudgetSpentUsd = 0;
+  if (amountUsd && planId !== "free") {
+    apiBudgetUsd = allocateApiBudgetFromPayment(amountUsd, planId).budgetUsd;
+  }
+
   getDb()
-    .prepare("UPDATE users SET plan = ?, plan_expires_at = ?, updated_at = ? WHERE id = ?")
-    .run(planId, expires, at, userId);
-  return { planId, planExpiresAt: expires };
+    .prepare(
+      `UPDATE users SET plan = ?, plan_expires_at = ?, api_budget_usd = ?, api_budget_spent_usd = ?, updated_at = ?
+       WHERE id = ?`
+    )
+    .run(planId, expires, apiBudgetUsd, apiBudgetSpentUsd, at, userId);
+  return { planId, planExpiresAt: expires, apiBudgetUsd };
+}
+
+export function spendUserApiBudget(userId, costUsd) {
+  if (!costUsd || costUsd <= 0) return;
+  getDb()
+    .prepare("UPDATE users SET api_budget_spent_usd = api_budget_spent_usd + ?, updated_at = ? WHERE id = ?")
+    .run(costUsd, new Date().toISOString(), userId);
+}
+
+export function setPaymentApiBudget(paymentId, apiBudgetUsd) {
+  getDb().prepare("UPDATE payments SET api_budget_usd = ? WHERE id = ?").run(apiBudgetUsd, paymentId);
 }
 
 export function createPayment({ id, userId, planId, amountUsd, provider, providerPaymentId, invoiceUrl }) {

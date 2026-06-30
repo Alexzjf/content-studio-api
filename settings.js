@@ -292,6 +292,7 @@
 
     if (!usage || !usageCard) return;
     usageCard.classList.remove("hidden");
+    globalThis.AppPlanUsage?.refresh?.();
 
     const req = usage.requests || {};
     const vid = usage.videos || {};

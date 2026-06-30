@@ -253,9 +253,9 @@ const LOCALES = {
     planUsageLine: "{used} / {limit} AI requests today",
     planVideoUsageLine: "{used} / {limit} videos today",
     planLimitBanner:
-      "Free limit reached for today. Upgrade below or use your own API key in Connection.",
+      "Free limit reached for today. Upgrade below or wait for the free daily reset.",
     planLimitExceeded:
-      "Daily limit reached for today. Open Settings → Plans to upgrade, or add your own API key.",
+      "Daily limit reached for today. Open Settings → Plans to upgrade, or wait for the free daily reset.",
     planCurrent: "Current plan",
     planFree: "Free",
     planBase: "Base",
@@ -574,9 +574,9 @@ const LOCALES = {
     planUsageLine: "{used} / {limit} AI-запитів сьогодні",
     planVideoUsageLine: "{used} / {limit} відео сьогодні",
     planLimitBanner:
-      "Безкоштовний ліміт на сьогодні вичерпано. Оформіть тариф нижче або додайте свій API-ключ у «Підключення».",
+      "Безкоштовний ліміт на сьогодні вичерпано. Оформіть тариф нижче або зачекайте безкоштовного відновлення.",
     planLimitExceeded:
-      "Денний ліміт вичерпано. Відкрийте Налаштування → Тарифи або додайте свій API-ключ.",
+      "Безкоштовний ліміт на сьогодні вичерпано. Оформіть тариф нижче або зачекайте безкоштовного відновлення.",
     planCurrent: "Поточний тариф",
     planFree: "Free",
     planBase: "Base",

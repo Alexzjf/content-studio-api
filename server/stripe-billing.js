@@ -7,8 +7,10 @@ import {
   findPaymentByProviderId,
   findUserById,
   isPlaceholderEmail,
+  setPaymentApiBudget,
   updatePaymentStatus,
 } from "./db.js";
+import { allocateApiBudgetFromPayment } from "./api-budget.js";
 import { getPlanConfig } from "./plans.js";
 import { queueSheetsSync } from "./sheets-crm.js";
 
@@ -105,7 +107,9 @@ function markPaymentPaid(payment, meta = {}) {
     return { ok: true, already: true, paymentId: payment.id };
   }
   updatePaymentStatus(payment.id, "paid", { metaJson: meta });
-  activateUserPlan(payment.user_id, payment.plan_id, 30);
+  const allocation = allocateApiBudgetFromPayment(payment.amount_usd, payment.plan_id);
+  activateUserPlan(payment.user_id, payment.plan_id, 30, { amountUsd: payment.amount_usd });
+  setPaymentApiBudget(payment.id, allocation.budgetUsd);
   queueSheetsSync(payment.user_id);
   return {
     ok: true,
@@ -113,6 +117,9 @@ function markPaymentPaid(payment, meta = {}) {
     paymentId: payment.id,
     userId: payment.user_id,
     planId: payment.plan_id,
+    apiBudgetUsd: allocation.budgetUsd,
+    apiShare: allocation.apiShare,
+    estimatedMonthlyCost: allocation.estimatedMonthlyCost,
   };
 }
 

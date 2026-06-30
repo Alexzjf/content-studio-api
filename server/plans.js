@@ -1,4 +1,5 @@
 import { findUserById, getDb } from "./db.js";
+import { estimateRequestCost } from "./api-budget.js";
 
 export const PLANS = {
   free: {
@@ -74,6 +75,10 @@ export function getUserUsageStatus(userId) {
   const row = getUsageRow(userId, day);
   const requests = row.requests || 0;
   const videos = row.videos || 0;
+  const user = findUserById(userId);
+
+  const apiBudgetUsd = Number(user?.api_budget_usd || 0);
+  const apiBudgetSpent = Number(user?.api_budget_spent_usd || 0);
 
   return {
     plan: planId,
@@ -90,9 +95,17 @@ export function getUserUsageStatus(userId) {
     },
     authorReplies: plan.authorReplies,
     resetsAt: nextResetIso(),
-    planExpiresAt: findUserById(userId)?.plan_expires_at || null,
+    planExpiresAt: user?.plan_expires_at || null,
     priceUsd: plan.priceUsd,
     priceUah: plan.priceUah,
+    apiBudget:
+      apiBudgetUsd > 0
+        ? {
+            totalUsd: apiBudgetUsd,
+            spentUsd: apiBudgetSpent,
+            remainingUsd: Math.max(0, apiBudgetUsd - apiBudgetSpent),
+          }
+        : null,
   };
 }
 
@@ -111,6 +124,7 @@ export function checkAndConsumeQuota(userId, { kind = "request" } = {}) {
   const status = getUserUsageStatus(userId);
   const plan = getPlanConfig(status.plan);
   const day = status.day;
+  const user = findUserById(userId);
 
   if (kind === "video" && status.videos.used >= plan.dailyVideos) {
     return {
@@ -130,6 +144,20 @@ export function checkAndConsumeQuota(userId, { kind = "request" } = {}) {
     };
   }
 
+  const apiBudgetUsd = Number(user?.api_budget_usd || 0);
+  if (status.plan !== "free" && apiBudgetUsd > 0) {
+    const cost = estimateRequestCost(kind);
+    const spent = Number(user?.api_budget_spent_usd || 0);
+    if (spent + cost > apiBudgetUsd + 1e-9) {
+      return {
+        ok: false,
+        code: "API_BUDGET_EXCEEDED",
+        ...status,
+        message: "Subscription API budget exhausted",
+      };
+    }
+  }
+
   const videoInc = kind === "video" ? 1 : 0;
   const database = getDb();
   const now = new Date().toISOString();
@@ -143,6 +171,15 @@ export function checkAndConsumeQuota(userId, { kind = "request" } = {}) {
          updated_at = excluded.updated_at`
     )
     .run(userId, day, videoInc, now, videoInc);
+
+  if (status.plan !== "free" && apiBudgetUsd > 0) {
+    const cost = estimateRequestCost(kind);
+    database
+      .prepare(
+        "UPDATE users SET api_budget_spent_usd = api_budget_spent_usd + ?, updated_at = ? WHERE id = ?"
+      )
+      .run(cost, now, userId);
+  }
 
   return { ok: true, ...getUserUsageStatus(userId) };
 }

@@ -392,25 +392,79 @@ function getSharedDirectGeminiKey() {
   return String(cfg || "").trim();
 }
 
-function isSharedQuotaError(err) {
+function isPlanLimitError(err) {
   const msg = String(err?.message || "");
   return (
     err?.code === "LIMIT_EXCEEDED" ||
     err?.code === "VIDEO_LIMIT_EXCEEDED" ||
     msg === "__plan_limit__" ||
+    msg === t("planLimitExceeded")
+  );
+}
+
+function isSharedServerBusyError(err) {
+  if (isPlanLimitError(err)) return false;
+  const msg = String(err?.message || "");
+  return (
     msg === "__silent_ai__" ||
     msg === t("aiSharedUnavailable") ||
     msg === t("aiSharedBusy") ||
     msg === t("chatHistoryTooLong") ||
-    /gemini|quota|ліміт|зайнят|busy|429|403|forbidden|api помилка|rate limit|resource.?exhausted|high demand|overloaded|try again|experiencing|тимчасово недоступн|тимчасово зайнят/i.test(
+    /gemini|зайнят|busy|429|403|forbidden|api помилка|rate limit|resource.?exhausted|high demand|overloaded|try again|experiencing|тимчасово недоступн|тимчасово зайнят/i.test(
       msg
     )
   );
 }
 
-function isRetryableSharedError(err) {
-  return isSharedQuotaError(err);
+function isSharedQuotaError(err) {
+  return isPlanLimitError(err) || isSharedServerBusyError(err);
 }
+
+function isRetryableSharedError(err) {
+  return isSharedServerBusyError(err);
+}
+
+let planUsageCache = null;
+let planUsageCacheAt = 0;
+
+async function refreshPlanUsageCache() {
+  try {
+    planUsageCache = await window.AppAuth?.apiRequest?.("/billing/usage", undefined, "GET");
+    planUsageCacheAt = Date.now();
+  } catch {
+    planUsageCache = null;
+  }
+  return planUsageCache;
+}
+
+async function assertSharedPlanQuota() {
+  if (getAiConnectionMode() !== "shared") return;
+  if (!window.AppAuth?.getAccessToken) return;
+  const token = await window.AppAuth.getAccessToken();
+  if (!token) return;
+
+  if (!planUsageCache || Date.now() - planUsageCacheAt > 45000) {
+    await refreshPlanUsageCache();
+  }
+  const used = Number(planUsageCache?.requests?.used ?? 0);
+  const limit = Number(planUsageCache?.requests?.limit ?? 20);
+  if (used >= limit) {
+    const err = new Error(t("planLimitExceeded"));
+    err.code = "LIMIT_EXCEEDED";
+    throw err;
+  }
+}
+
+function bumpPlanUsageCache() {
+  if (!planUsageCache?.requests) return;
+  planUsageCache.requests.used = Number(planUsageCache.requests.used || 0) + 1;
+  planUsageCache.requests.remaining = Math.max(
+    0,
+    Number(planUsageCache.requests.limit || 0) - planUsageCache.requests.used
+  );
+}
+
+globalThis.AppPlanUsage = { refresh: refreshPlanUsageCache };
 
 async function callSharedGeminiDirect(sources, settings, history, signal, apiKey) {
   await ensureAiReady();
@@ -459,12 +513,13 @@ async function hostedChatDirect(sources, settings, history, signal) {
       return await attemptHosted();
     } catch (err) {
       if (signal?.aborted || isChatAbortedError(err)) throw err;
-      if (tryNum === 0 && isSharedQuotaError(err)) {
+      if (isPlanLimitError(err)) throw err;
+      if (tryNum === 0 && isSharedServerBusyError(err)) {
         setStatus(t("aiSharedBusy"));
         await new Promise((r) => setTimeout(r, 4000));
         continue;
       }
-      if (ownGemini && isSharedQuotaError(err)) {
+      if (ownGemini && isSharedServerBusyError(err)) {
         setStatus(t("aiSharedFallbackOwnKey"));
         return callSharedGeminiDirect(sources, settings, history, signal, ownGemini);
       }
@@ -793,6 +848,7 @@ async function bootApp() {
     window.AppChrome?.setHeaderStatus("", "");
     void warmHostedServer({ showStatus: false });
     startHostedKeepAlive();
+    void refreshPlanUsageCache();
   } catch (err) {
     console.error("Content Studio init failed:", err);
     window.AppChrome?.setHeaderStatus(`Init: ${err.message}`, "error");
@@ -2392,6 +2448,16 @@ async function sendChatMessage(text, options = {}) {
     return;
   }
 
+  try {
+    await assertSharedPlanQuota();
+  } catch (err) {
+    if (isPlanLimitError(err)) {
+      setStatus(t("planLimitExceeded"), "error");
+      window.AppSettings?.open?.("plans");
+      return;
+    }
+  }
+
   saveCurrentOwnToCache();
   void saveSettingsQuiet();
 
@@ -2473,6 +2539,7 @@ async function sendChatMessage(text, options = {}) {
     chatHistory.push({ role: "assistant", content: replyText });
     appendMessage("assistant", replyText);
     void persistChatHistory();
+    if (getAiConnectionMode() === "shared") bumpPlanUsageCache();
     setStatus(t("ready"), "success");
   } catch (err) {
     if (opId !== chatOpGen) return;
